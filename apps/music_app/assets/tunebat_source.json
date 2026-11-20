@@ -1,0 +1,29 @@
+{
+  "source_file": "tunebat_データセット外_10000曲.xlsx",
+  "source_sha256": "1c111c0ca146f6c52d746c8a7bc5da77b16bd12cdfa02f7d8caa41283762a878",
+  "rows": 10000,
+  "notes": {
+    "取得元": "Tunebat（tunebat.com）の曲ページに並ぶおすすめ曲一覧。竹内まりや「元気を出して」から順にたどって収集",
+    "取得日": "2026-11-20",
+    "除外": "Hugging Face の maharshipandya/spotify-tracks-dataset に track_id が一致する曲、または artists と track_name が一致する曲は除外。Tunebat に解析データが無い曲（キー・BPM が空で数値がすべて0表示）も除外",
+    "列の形式": "データセットと同じ列名・同じ順番。artists は複数アーティストを「;」でつなぐ形に変換",
+    "key / mode": "データセットと同じ：key は C=0, C♯=1 … B=11、mode は長調=1・短調=0",
+    "0〜1の列": "danceability / energy / valence（と、ある場合の speechiness / acousticness / instrumentalness / liveness）は Tunebat の0〜100を100で割った値",
+    "tempo": "Tunebat の BPM（整数）",
+    "空欄の列": "explicit / time_signature / track_genre は Tunebat に無いため空欄。album_name / duration_ms / loudness / speechiness / acousticness / instrumentalness / liveness は、曲ページを個別に開いた 155 曲のみ入力、それ以外は空欄",
+    "camelot": "データセットには無い追加列（Tunebat の Camelot 表記）",
+    "曲数": "10000 曲"
+  },
+  "units": "入力済みの0〜1をそのまま保持。再度100で割らない。Popularityは0〜100、tempoはBPM、duration_msはミリ秒。",
+  "missing": "ジャンルや追加特徴の空欄を保持。補完・推測はしない。特徴ごとの収録件数を確認する。",
+  "feature_counts": {
+    "tempo": 10000,
+    "energy": 10000,
+    "danceability": 10000,
+    "valence": 10000,
+    "duration_ms": 155,
+    "acousticness": 155,
+    "instrumentalness": 155,
+    "speechiness": 155
+  }
+}

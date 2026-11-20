@@ -22,7 +22,9 @@ LABELS = {
 }
 UNITS = {feature: "0〜1" for feature in FEATURES}
 UNITS.update(tempo="BPM", duration_min="分")
-META = ("track_id", "track_name", "artists", "track_genre")
+META = ("track_id", "track_name", "artists")
+TUNEBAT_CSV = Path(__file__).with_name("assets") / "tunebat_tracks.csv"
+ARTIST_ALIASES = {"gen hoshino": ("星野源", "ほしのげん"), "mariya takeuchi": ("竹内まりや", "たけうちまりや")}
 
 
 @dataclass
@@ -45,14 +47,34 @@ def read_csv_bytes(content: bytes) -> pd.DataFrame:
         return pd.read_csv(BytesIO(content), encoding="cp932", low_memory=False)
 
 
-def prepare_catalog(raw: pd.DataFrame) -> Catalog:
+def index_tracks(tracks: pd.DataFrame, genre_rows: pd.DataFrame) -> pd.DataFrame:
+    tracks = tracks.copy().reset_index(drop=True)
+    genres = genre_rows.groupby("track_id", sort=False).track_genre.agg(lambda values: " / ".join(sorted(set(values))))
+    tracks["genres"] = tracks.track_id.map(genres).fillna("未登録")
+    tracks["_title"] = tracks.track_name.map(normalize_text)
+    tracks["_artist"] = tracks.artists.map(normalize_text)
+    if "_aliases" not in tracks:
+        tracks["_aliases"] = ""
+    aliases = tracks._aliases.fillna("").map(normalize_text)
+    japanese = tracks._artist.map(lambda value: " ".join(alias for artist in value.split(";") for alias in ARTIST_ALIASES.get(artist.strip(), ())))
+    tracks["_search"] = tracks._title + " " + tracks._artist + " " + aliases + " " + japanese
+    return tracks
+
+
+def prepare_catalog(raw: pd.DataFrame, source_label="CSV") -> Catalog:
     """genre_rowsは曲×ジャンル、tracksは曲IDごとに1行。元データは変更しない。"""
     missing = sorted(set(META) - set(raw.columns))
     if missing:
         raise ValueError("CSVに必要な列がありません: " + ", ".join(missing))
     df = raw.copy()
-    for column in META:
+    if "track_genre" not in df:
+        df["track_genre"] = pd.NA
+    for column in (*META, "track_genre"):
         df[column] = df[column].astype("string").str.strip().replace("", pd.NA)
+    if "data_sources" not in df:
+        df["data_sources"] = source_label
+    else:
+        df["data_sources"] = df.data_sources.fillna(source_label)
     for column in ("popularity", "duration_ms", *FEATURES):
         if column in df:
             df[column] = pd.to_numeric(df[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
@@ -72,21 +94,44 @@ def prepare_catalog(raw: pd.DataFrame) -> Catalog:
     # メタデータと収録済みの推薦用4特徴を確認。追加特徴の欠損は項目別に扱う。
     required = [*META, *[f for f in CORE_FEATURES if f in df]]
     valid = df.dropna(subset=required)
-    genre_rows = valid.drop_duplicates(["track_id", "track_genre"]).reset_index(drop=True)
-    tracks = genre_rows.drop_duplicates("track_id").reset_index(drop=True).copy()
-    genres = genre_rows.groupby("track_id", sort=False).track_genre.agg(lambda values: " / ".join(sorted(set(values))))
-    tracks["genres"] = tracks.track_id.map(genres)
-    tracks["_title"] = tracks.track_name.map(normalize_text)
-    tracks["_artist"] = tracks.artists.map(normalize_text)
-    tracks["_search"] = tracks._title + " " + tracks._artist
+    known_genres = valid.dropna(subset=["track_genre"])
+    genre_rows = known_genres.drop_duplicates(["track_id", "track_genre"]).reset_index(drop=True)
+    tracks = index_tracks(valid.drop_duplicates("track_id"), genre_rows)
     available = tuple(f for f in FEATURES if f in genre_rows and genre_rows[f].notna().any())
     report = {
         "入力行数": len(raw), "欠損・不正値による除外": len(df) - len(valid),
-        "同一曲・同一ジャンルの重複除外": len(valid) - len(genre_rows),
+        "同一曲・同一ジャンルの重複除外": len(known_genres) - len(genre_rows),
         "ジャンル集計用の行数": len(genre_rows), "楽曲数": len(tracks),
         "ジャンル数": genre_rows.track_genre.nunique(),
     }
     return Catalog(genre_rows, tracks, available, report)
+
+
+def add_tunebat_tracks(catalog: Catalog, additional: pd.DataFrame) -> Catalog:
+    """同じSpotify IDは統合。既存曲の音響値と既知ジャンルは変更しない。"""
+    extra = prepare_catalog(additional, source_label="Tunebat").tracks
+    tracks = catalog.tracks.set_index("track_id", drop=False).copy()
+    overlap = set(tracks.index) & set(extra.track_id)
+    for _, row in extra.loc[extra.track_id.isin(overlap)].iterrows():
+        track_id = row.track_id
+        previous = tracks.loc[track_id]
+        tracks.at[track_id, "_aliases"] = " ".join(str(value) for value in (
+            previous.get("_aliases", ""), previous.track_name, previous.artists, row.track_name, row.artists,
+        ) if pd.notna(value))
+        tracks.at[track_id, "track_name"] = row.track_name
+        tracks.at[track_id, "artists"] = row.artists
+        sources = str(previous.data_sources).split(" / ") + ["Tunebat"]
+        tracks.at[track_id, "data_sources"] = " / ".join(dict.fromkeys(sources))
+    new_tracks = extra.loc[~extra.track_id.isin(overlap)]
+    tracks = pd.concat([tracks.reset_index(drop=True), new_tracks], ignore_index=True)
+    tracks = index_tracks(tracks, catalog.genre_rows)
+    report = dict(catalog.report)
+    report.update({
+        "元データの楽曲数": len(catalog.tracks), "追加ファイルの曲数": len(extra),
+        "既存の楽曲IDと一致": len(overlap), "新規追加曲数": len(new_tracks),
+        "楽曲数": len(tracks), "ジャンル未登録の曲数": int(tracks.genres.eq("未登録").sum()),
+    })
+    return Catalog(catalog.genre_rows, tracks, catalog.features, report)
 
 
 def dataset_source() -> tuple[str, int | None]:
@@ -102,13 +147,17 @@ def dataset_source() -> tuple[str, int | None]:
 
 
 @st.cache_data(show_spinner=False)
-def load_catalog(source: str, modified: int | None = None) -> Catalog:
+def load_catalog(source: str, modified: int | None = None, supplement_stamp: int | None = None,
+                 source_label: str = "Spotify Tracks Dataset") -> Catalog:
     if source == DATASET_URL:
         with urlopen(source, timeout=45) as response:
             content = response.read()
     else:
         content = Path(source).read_bytes()
-    return prepare_catalog(read_csv_bytes(content))
+    catalog = prepare_catalog(read_csv_bytes(content), source_label=source_label)
+    if supplement_stamp is not None:
+        catalog = add_tunebat_tracks(catalog, read_csv_bytes(TUNEBAT_CSV.read_bytes()))
+    return catalog
 
 
 @st.cache_data(show_spinner=False)
@@ -129,14 +178,18 @@ def catalog_for_page() -> Catalog:
                 st.session_state.pop("catalog_csv_bytes", None)
                 st.session_state["catalog_upload_version"] = upload_version + 1
                 st.rerun()
+        elif os.environ.get("SPOTIFY_DATASET_PATH"):
+            st.caption("環境変数で指定したCSVを使用中")
         else:
-            st.caption("標準データ：Spotify Tracks Dataset")
+            st.caption("標準データ：Spotify Tracks Dataset ＋ Tunebat追加曲")
     try:
         with st.spinner("楽曲データを読み込んでいます…"):
             if st.session_state.get("catalog_csv_bytes") is not None:
                 catalog = load_uploaded_catalog(st.session_state["catalog_csv_bytes"])
             else:
-                catalog = load_catalog(*dataset_source())
+                stamp = TUNEBAT_CSV.stat().st_mtime_ns if TUNEBAT_CSV.is_file() and not os.environ.get("SPOTIFY_DATASET_PATH") else None
+                source_label = "指定したCSV" if os.environ.get("SPOTIFY_DATASET_PATH") else "Spotify Tracks Dataset"
+                catalog = load_catalog(*dataset_source(), supplement_stamp=stamp, source_label=source_label)
     except (OSError, ValueError, UnicodeError, pd.errors.ParserError) as exc:
         st.error("楽曲データを読み込めませんでした。ネットワーク接続を確認するか、左の「データの設定」からCSVを選んでください。")
         with st.expander("エラーの詳細"):

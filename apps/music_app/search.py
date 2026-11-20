@@ -8,6 +8,17 @@ from music_app.data import Catalog, normalize_text
 from music_app.selection import clear_selection, select_track, selected_track
 
 PAGE_SIZE = 25
+ALL_GENRES = "__all__"
+UNREGISTERED = "__unregistered__"
+
+
+def tracks_in_genre(catalog: Catalog, genre: str | None) -> pd.DataFrame:
+    if genre is None:
+        return catalog.tracks
+    if genre == UNREGISTERED:
+        return catalog.tracks.loc[catalog.tracks.genres.eq("未登録")]
+    ids = catalog.genre_rows.loc[catalog.genre_rows.track_genre.eq(genre), "track_id"]
+    return catalog.tracks.loc[catalog.tracks.track_id.isin(ids)]
 
 
 def search_tracks(tracks: pd.DataFrame, query: str, order="一致順") -> pd.DataFrame:
@@ -37,13 +48,36 @@ def reset_page():
 def render_search(catalog: Catalog):
     st.title("曲の検索・選択")
     st.caption("好きな曲を選んで、ジャンルの特徴や似ている楽曲を探す基準にします。")
-    query = st.text_input("曲名・アーティストを検索", placeholder="例：Comedy / 星野源", key="_search_query", on_change=reset_page)
+    genres = sorted(catalog.genre_rows.track_genre.unique())
+    genre_options = [ALL_GENRES, *genres]
+    if catalog.tracks.genres.eq("未登録").any():
+        genre_options.append(UNREGISTERED)
+    if "pending_search_genre" in st.session_state:
+        requested = st.session_state.pop("pending_search_genre")
+        st.session_state["_search_genre"] = requested if requested in genre_options else ALL_GENRES
+        st.session_state["_search_query"] = ""
+        st.session_state["_search_only_added"] = False
+        reset_page()
+    if "_search_genre" not in st.session_state:
+        st.session_state["_search_genre"] = st.session_state.get("search_genre", ALL_GENRES)
+    if st.session_state["_search_genre"] not in genre_options:
+        st.session_state["_search_genre"] = ALL_GENRES
+    genre = st.selectbox("ジャンルで絞る", genre_options, key="_search_genre", on_change=reset_page,
+                         format_func=lambda value: "すべてのジャンル" if value == ALL_GENRES else "ジャンル未登録" if value == UNREGISTERED else value)
+    st.session_state["search_genre"] = genre
+    candidates = tracks_in_genre(catalog, None if genre == ALL_GENRES else genre)
+    if catalog.tracks.data_sources.str.contains("Tunebat", regex=False, na=False).any():
+        only_added = st.checkbox("追加したTunebatの曲だけ表示", key="_search_only_added", on_change=reset_page)
+        if only_added:
+            candidates = candidates.loc[candidates.data_sources.str.contains("Tunebat", regex=False, na=False)]
+            st.caption("追加曲のジャンルは未登録です。曲を選ぶと、収録されている音の特徴で既存ジャンルと比較できます。")
+    query = st.text_input("曲名・アーティストを検索", placeholder="例：元気を出して / 星野源 / Gen Hoshino", key="_search_query", on_change=reset_page)
     st.caption("大文字・小文字、全角・半角を区別しません。空白で区切ると、すべての語を含む曲を検索します。")
     order = st.selectbox("表示順", ["一致順", "人気度順", "曲名順"], key="_search_order", on_change=reset_page)
-    results = search_tracks(catalog.tracks, query, order)
+    results = search_tracks(candidates, query, order)
     st.write(f"検索結果 **{len(results):,}曲** ／ 全{len(catalog.tracks):,}曲")
     if results.empty:
-        st.warning("該当する曲がありません。検索語を短くするか、別の曲名・アーティスト名を試してください。")
+        st.warning("該当する曲がありません。検索語を短くするか、ジャンルや追加曲の絞り込み条件を変えてください。")
     else:
         pages = math.ceil(len(results) / PAGE_SIZE)
         if st.session_state.get("_search_page", 1) > pages:
@@ -52,8 +86,8 @@ def render_search(catalog: Catalog):
         start = (page - 1) * PAGE_SIZE
         visible = results.iloc[start:start + PAGE_SIZE].set_index("track_id", drop=False)
         st.caption(f"{start + 1:,}〜{min(start + PAGE_SIZE, len(results)):,}曲目 ／ {pages:,}ページ")
-        table = visible[["track_name", "artists", "album_name", "genres", "popularity"]].rename(columns={
-            "track_name": "曲名", "artists": "アーティスト", "album_name": "アルバム", "genres": "ジャンル", "popularity": "人気度",
+        table = visible[["track_name", "artists", "album_name", "genres", "popularity", "data_sources"]].rename(columns={
+            "track_name": "曲名", "artists": "アーティスト", "album_name": "アルバム", "genres": "ジャンル", "popularity": "人気度", "data_sources": "出典",
         })
         st.dataframe(table, hide_index=True, width="stretch")
         option_labels = {i: f"{row.track_name} / {row.artists} — {row.album_name} [{i[-6:]}]"
@@ -75,9 +109,10 @@ def render_search(catalog: Catalog):
         st.write(f"**{song['track_name']}**")
         st.write(song["artists"])
         st.caption(f"アルバム：{song['album_name']}　／　ジャンル：{song['genres']}")
+        st.caption("出典：" + song["data_sources"])
         if song.get("popularity") is not None:
             st.caption(f"人気度：{song['popularity']:g} / 100")
         if st.button("曲の選択を解除", key="_search_clear"):
             clear_selection()
             st.rerun()
-        st.page_link("pages/ジャンル比較.py", label="この曲のジャンルを比較する", icon="📊")
+        st.page_link("pages/ジャンル比較.py", label="この曲とジャンルの特徴を比較する", icon="📊")
