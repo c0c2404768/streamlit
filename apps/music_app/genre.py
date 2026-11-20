@@ -59,7 +59,7 @@ def summary_for_display(summary: pd.DataFrame) -> pd.DataFrame:
     })
 
 
-def render_distribution(catalog: Catalog, summary: pd.DataFrame, genres: list[str], feature: str):
+def render_distribution(catalog: Catalog, summary: pd.DataFrame, genres: list[str], feature: str, song=None):
     title = f"{LABELS[feature]}（{UNITS[feature]}）"
     table = summary[summary.track_genre.isin(genres) & summary.feature.eq(feature)].dropna(subset=["median"])
     if table.empty:
@@ -68,10 +68,27 @@ def render_distribution(catalog: Catalog, summary: pd.DataFrame, genres: list[st
     scale = {"domain": [0, 1]} if UNITS[feature] == "0〜1" else {"zero": False}
     st.subheader("中央値と真ん中50%の範囲")
     st.caption("点が中央値、線が第1〜第3四分位数です。IQRはこの線の幅を表します。")
+    y_axis = {"field": "track_genre", "type": "nominal", "sort": genres, "title": None}
+    layers = [
+        {"mark": {"type": "rule", "strokeWidth": 9, "color": "#8bb9cd"},
+         "encoding": {"y": y_axis, "x": {"field": "q1", "type": "quantitative", "scale": scale, "title": title}, "x2": {"field": "q3"}}},
+        {"mark": {"type": "point", "filled": True, "size": 85, "color": "#126782"},
+         "encoding": {"y": y_axis, "x": {"field": "median", "type": "quantitative", "scale": scale, "title": title}}},
+    ]
+    value = song.get(feature) if song else None
+    if value is not None and pd.notna(value):
+        layers.append({
+            "data": {"values": [{"selected_value": float(value), "selected_song": song["track_name"]}]},
+            "mark": {"type": "rule", "color": "#ef8a36", "strokeDash": [6, 4], "strokeWidth": 2},
+            "encoding": {"x": {"field": "selected_value", "type": "quantitative", "scale": scale, "title": title},
+                         "tooltip": [{"field": "selected_song", "title": "選択曲"}, {"field": "selected_value", "title": title, "format": ".3f"}]},
+        })
+        st.caption(f"オレンジの破線は選択曲「{song['track_name']}」の値：{value:.3f} {UNITS[feature]}です。")
+    elif song:
+        st.caption("選択曲にはこの特徴の値が収録されていません。値のある特徴を選ぶと、グラフに重ねて比較できます。")
     st.vega_lite_chart(table, {
         "height": max(180, len(genres) * 35),
         "encoding": {
-            "y": {"field": "track_genre", "type": "nominal", "sort": genres, "title": None},
             "tooltip": [
                 {"field": "track_genre", "title": "ジャンル"}, {"field": "count", "title": "曲数"},
                 {"field": "median", "title": "中央値", "format": ".3f"},
@@ -80,13 +97,13 @@ def render_distribution(catalog: Catalog, summary: pd.DataFrame, genres: list[st
                 {"field": "iqr", "title": "IQR", "format": ".3f"},
             ],
         },
-        "layer": [
-            {"mark": {"type": "rule", "strokeWidth": 9, "color": "#8bb9cd"},
-             "encoding": {"x": {"field": "q1", "type": "quantitative", "scale": scale, "title": title}, "x2": {"field": "q3"}}},
-            {"mark": {"type": "point", "filled": True, "size": 85, "color": "#126782"},
-             "encoding": {"x": {"field": "median", "type": "quantitative", "scale": scale, "title": title}}},
-        ],
+        "layer": layers,
     }, width="stretch")
+    if value is not None and pd.notna(value):
+        closest = table.loc[(table["median"] - value).abs().idxmin()]
+        position = "真ん中50%の範囲内" if closest.q1 <= value <= closest.q3 else "真ん中50%の範囲より低め" if value < closest.q1 else "真ん中50%の範囲より高め"
+        st.write(f"比較中では、{LABELS[feature]}の中央値が選択曲に最も近いのは **{closest.track_genre}** です。選択曲の値は、そのジャンルの{position}にあります。")
+        st.caption("いま選んでいる1つの特徴での比較です。好みや曲全体の類似度を示すものではありません。")
     with st.expander("箱ひげ図で分布を見る"):
         values = catalog.genre_rows.loc[catalog.genre_rows.track_genre.isin(genres), ["track_genre", feature]].dropna()
         st.vega_lite_chart(values, {
@@ -105,12 +122,18 @@ def render_genre_comparison(catalog: Catalog):
     st.caption("音の特徴の中央値とばらつきから、ジャンルの違いを比べます。")
     song = selected_track(catalog.tracks)
     genres = sorted(catalog.genre_rows.track_genre.unique())
+    if not genres:
+        st.info("このデータにはジャンル情報がありません。ジャンルが登録された標準データを使うと比較できます。")
+        return
     defaults = [genre for genre in DEFAULT_GENRES if genre in genres] or genres[:7]
     if song:
         st.info(f"選択中の曲：{song['track_name']} / {song['artists']}　｜　{song['genres']}")
         own_genres = catalog.genre_rows.loc[catalog.genre_rows.track_id.eq(song["track_id"]), "track_genre"].tolist()
-        if st.button("選択曲のジャンルで比較する", key="_genre_use_selected"):
-            st.session_state["genre_choices"] = list(dict.fromkeys(own_genres))[:12]
+        if own_genres:
+            if st.button("選択曲のジャンルで比較する", key="_genre_use_selected"):
+                st.session_state["genre_choices"] = list(dict.fromkeys(own_genres))[:12]
+        else:
+            st.caption("選択曲のジャンルは未登録です。下でジャンルを選び、この曲の特徴と各ジャンルの代表値を比べられます。")
     previous = st.session_state.get("genre_choices", defaults)
     st.session_state["genre_choices"] = [genre for genre in previous if genre in genres][:12]
     choices = st.multiselect("比較するジャンル（最大12個）", genres, key="genre_choices", max_selections=12)
@@ -125,7 +148,11 @@ def render_genre_comparison(catalog: Catalog):
         st.caption("このCSVに含まれていない特徴：" + "、".join(missing))
     summary = genre_statistics(catalog.genre_rows, catalog.features)
     feature = st.selectbox("詳しく見る特徴", catalog.features, format_func=lambda f: f"{LABELS[f]}（{UNITS[f]}）", key="_genre_feature")
-    render_distribution(catalog, summary, choices, feature)
+    render_distribution(catalog, summary, choices, feature, song)
+    explore = st.selectbox("気になるジャンルの曲を探す", choices, key="_genre_explore")
+    if st.button(f"{explore} の曲を見る", key="_genre_open_tracks", type="primary"):
+        st.session_state["pending_search_genre"] = explore
+        st.switch_page("pages/曲の検索・選択.py")
     st.subheader(f"{len(catalog.features)}項目をまとめて比較")
     heat = heatmap_values(summary)
     # 極端なジャンルだけで色が薄まらないよう、色の範囲を固定する。
@@ -164,5 +191,7 @@ def render_genre_comparison(catalog: Catalog):
     with st.expander("データと特徴の説明"):
         st.write("テンポは速さ、Energyは力強さ、Valenceは明るさ、Danceabilityはノリの良さの指標です。Acousticnessはアコースティックらしさ、Instrumentalnessはインストらしさ、Speechinessは話し声の多さ、Durationは曲の長さです。")
         st.caption("同じ楽曲が複数ジャンルに登録されている場合は、それぞれのジャンルに含めます。同一曲・同一ジャンルの重複は除いています。欠損値がある場合の曲数は特徴ごとに異なります。")
+        if catalog.report.get("追加ファイルの曲数"):
+            st.caption("Tunebatの追加曲は検索・選択に使えます。ジャンル未登録の追加曲をジャンル別の集計には含めず、既存曲と同じIDの音響値は元データの値を維持しています。")
         st.dataframe(pd.DataFrame(catalog.report.items(), columns=["項目", "件数"]), hide_index=True)
         st.markdown("出典：[Spotify Tracks Dataset](https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset)")

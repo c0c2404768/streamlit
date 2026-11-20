@@ -11,9 +11,9 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps"))
 
-from music_app.data import FEATURES, dataset_source, prepare_catalog, read_csv_bytes
+from music_app.data import FEATURES, TUNEBAT_CSV, add_tunebat_tracks, dataset_source, prepare_catalog, read_csv_bytes
 from music_app.genre import genre_statistics, heatmap_values, pairwise_statistics
-from music_app.search import search_tracks
+from music_app.search import UNREGISTERED, search_tracks, tracks_in_genre
 from music_app.selection import select_track, selected_track
 
 COMEDY = "5SuOikwiRyPMVoIQDJUgSV"
@@ -75,6 +75,47 @@ class DataAndSearchTests(unittest.TestCase):
         self.assertTrue(search_tracks(tracks, "[").empty)
         self.assertTrue(search_tracks(tracks, "missing_song").empty)
         self.assertEqual(search_tracks(tracks, "Comedy", "人気度順").iloc[0].track_id, COMEDY)
+        self.assertEqual(search_tracks(tracks, "星野源 Comedy").iloc[0].track_id, COMEDY)
+
+    def test_additional_tracks_preserve_missing_values_and_original_genres(self):
+        extra = fixture().iloc[:2].copy()
+        extra.loc[extra.index[0], ["track_name", "artists", "tempo"]] = ["喜劇", "星野源", 190]
+        extra.loc[extra.index[1], ["track_id", "track_name", "artists"]] = ["new-track", "元気を出して", "Mariya Takeuchi"]
+        extra["track_genre"] = pd.NA
+        extra["acousticness"] = float("nan")
+        catalog = add_tunebat_tracks(self.catalog, extra)
+        self.assertEqual(len(catalog.tracks), 60)
+        pd.testing.assert_frame_equal(catalog.genre_rows, self.catalog.genre_rows)
+        lookup = catalog.tracks.set_index("track_id")
+        self.assertEqual(lookup.loc[COMEDY, "tempo"], 100)
+        self.assertEqual(lookup.loc[COMEDY, "genres"], "pop / rock")
+        self.assertEqual(lookup.loc[COMEDY, "data_sources"], "CSV / Tunebat")
+        self.assertEqual(search_tracks(catalog.tracks, "Comedy Gen").iloc[0].track_id, COMEDY)
+        self.assertEqual(search_tracks(catalog.tracks, "喜劇 星野源").iloc[0].track_id, COMEDY)
+        self.assertEqual(search_tracks(catalog.tracks, "竹内まりや").iloc[0].track_id, "new-track")
+        self.assertEqual(tracks_in_genre(catalog, UNREGISTERED).track_id.tolist(), ["new-track"])
+        self.assertEqual(set(tracks_in_genre(catalog, "rock").track_id), {COMEDY, "full-width"})
+        state = {}
+        song = select_track(catalog.tracks, "new-track", state)
+        self.assertEqual(song["genres"], "未登録")
+        self.assertIsNone(song["acousticness"])
+
+    def test_bundled_ten_thousand_tracks_have_correct_units_and_coverage(self):
+        extra = read_csv_bytes(TUNEBAT_CSV.read_bytes())
+        self.assertEqual(len(extra), 10000)
+        self.assertEqual(extra.track_id.nunique(), 10000)
+        self.assertTrue(extra.track_genre.isna().all())
+        first = extra.set_index("track_id").loc["3igzzZE41AOz8aHFMGRsqi"]
+        self.assertEqual(first.track_name, "元気を出して")
+        self.assertEqual(first.energy, .6)
+        self.assertEqual(first.tempo, 183)
+        for feature in ("energy", "valence", "danceability"):
+            self.assertTrue(extra[feature].between(0, 1).all())
+        for feature in ("duration_ms", "acousticness", "instrumentalness", "speechiness"):
+            self.assertEqual(extra[feature].notna().sum(), 155)
+        catalog = prepare_catalog(extra)
+        self.assertEqual(len(catalog.tracks), 10000)
+        self.assertTrue(catalog.genre_rows.empty)
 
     def test_same_titles_and_selection_validation(self):
         results = search_tracks(self.catalog.tracks, "Comedy")
@@ -149,12 +190,48 @@ class PageTests(unittest.TestCase):
         app.multiselect(key="genre_choices").set_value([]).run()
         self.assertFalse(app.exception)
         self.assertTrue(any("1つ以上" in x.value for x in app.info))
-        app.switch_page("pages/曲の検索・選択.py").run()
+        app.multiselect(key="genre_choices").set_value(["pop", "rock"]).run()
+        app.selectbox(key="_genre_explore").set_value("rock").run()
+        app.button(key="_genre_open_tracks").click().run()
         self.assertFalse(app.exception)
+        self.assertEqual(app.selectbox(key="_search_genre").value, "rock")
+        self.assertEqual(app.text_input(key="_search_query").value, "")
+        self.assertEqual(len(app.dataframe[0].value), 2)
+        # AppTestの次回実行先も、switch_pageで描画されたページに合わせる。
+        app.switch_page("pages/曲の検索・選択.py").run()
         self.assertEqual(app.session_state["selected_track_id"], COMEDY)
         app.button(key="_search_clear").click().run()
         self.assertFalse(app.exception)
         self.assertNotIn("selected_track_id", app.session_state)
+
+    def test_unknown_genre_song_can_be_compared_without_invented_values(self):
+        raw = fixture()
+        extra = raw.iloc[:1].copy()
+        extra["track_id"] = "new-track"
+        extra["track_name"] = "元気を出して"
+        extra["artists"] = "Mariya Takeuchi"
+        extra["track_genre"] = pd.NA
+        extra["data_sources"] = "Tunebat"
+        extra["duration_ms"] = float("nan")
+        pd.concat([raw, extra], ignore_index=True).to_csv(self.path, index=False)
+        app = self.app()
+        app.checkbox(key="_search_only_added").check().run()
+        app.text_input(key="_search_query").set_value("竹内まりや").run()
+        self.assertEqual(len(app.dataframe[0].value), 1)
+        app.selectbox(key="_search_pick").set_value("new-track").run()
+        app.button(key="_search_confirm").click().run()
+        app.switch_page("pages/ジャンル比較.py").run()
+        self.assertFalse(app.exception)
+        self.assertFalse(any(x.key == "_genre_use_selected" for x in app.button))
+        self.assertTrue(any("ジャンルは未登録" in x.value for x in app.caption))
+        self.assertTrue(any("オレンジの破線" in x.value for x in app.caption))
+        app.selectbox(key="_genre_feature").set_value("duration_min").run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("この特徴の値が収録されていません" in x.value for x in app.caption))
+        app.button(key="_genre_open_tracks").click().run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.checkbox(key="_search_only_added").value)
+        self.assertEqual(app.session_state["selected_track_id"], "new-track")
 
     def test_unselected_and_bad_csv_are_explained(self):
         app = self.app()
