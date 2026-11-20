@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+.matplotlib/
+.pytest_cache/
+data/*.csv
+apps/data/*.csv
+*.log
