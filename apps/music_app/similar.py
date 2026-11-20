@@ -5,6 +5,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from music_app.data import CORE_FEATURES, Catalog, LABELS
+from music_app.filters import describe_filters, render_filters, show_no_result
 from music_app.selection import selected_track
 
 FEATURES = CORE_FEATURES  # テンポ・力強さ・明るさ・ノリの良さ（班で共通の4特徴）
@@ -12,24 +13,35 @@ COLORS = ["#C55A11", "#2E8B6A", "#1B4D3E", "#8FB8A8"]
 
 
 @st.cache_data(show_spinner=False)
-def similarity_matrix(tracks: pd.DataFrame) -> np.ndarray:
-    """標準化 → L2正規化した行列。行どうしの内積がコサイン類似度になる。"""
+def standardized_matrix(tracks: pd.DataFrame) -> np.ndarray:
+    """4特徴を標準化（平均0・標準偏差1）した行列。行どうしの距離がユークリッド距離になる。"""
     values = tracks[list(FEATURES)].to_numpy(dtype=float)
     std = values.std(axis=0)
-    z = (values - values.mean(axis=0)) / np.where(std == 0, 1, std)
+    return (values - values.mean(axis=0)) / np.where(std == 0, 1, std)
+
+
+@st.cache_data(show_spinner=False)
+def similarity_matrix(tracks: pd.DataFrame) -> np.ndarray:
+    """標準化 → L2正規化した行列。行どうしの内積がコサイン類似度になる。"""
+    z = standardized_matrix(tracks)
     norm = np.linalg.norm(z, axis=1, keepdims=True)
     return z / np.where(norm == 0, 1, norm)
 
 
 def find_similar(tracks: pd.DataFrame, matrix: np.ndarray, track_id: str, top_n=10,
-                 max_popularity=None, other_genre=False) -> pd.DataFrame:
-    """選んだ曲にコサイン類似度が高い順で top_n 曲を返す。"""
+                 max_popularity=None, other_genre=False, method="cos") -> pd.DataFrame:
+    """選んだ曲に似ている順で top_n 曲を返す。
+    method="cos"：matrix はL2正規化した行列で、コサイン類似度（similarity）が高い順。
+    method="euc"：matrix は標準化した行列で、ユークリッド距離（distance）が小さい順。"""
     positions = np.flatnonzero(tracks.track_id.to_numpy() == track_id)
     if len(positions) == 0:
         raise ValueError("指定された楽曲IDがデータにありません。")
     base = tracks.iloc[positions[0]]
     result = tracks.copy()
-    result["similarity"] = matrix @ matrix[positions[0]]
+    if method == "euc":
+        result["distance"] = np.linalg.norm(matrix - matrix[positions[0]], axis=1)
+    else:
+        result["similarity"] = matrix @ matrix[positions[0]]
     # 同じ曲が別のIDで登録されている場合も除く（自分自身のコピーが1位に出ないように）
     same_song = result._title.eq(base._title) & result._artist.eq(base._artist)
     result = result.loc[~same_song]
@@ -38,7 +50,8 @@ def find_similar(tracks: pd.DataFrame, matrix: np.ndarray, track_id: str, top_n=
     if other_genre:
         own = set(str(base.genres).split(" / "))
         result = result.loc[[not (set(str(g).split(" / ")) & own) for g in result.genres]]
-    result = (result.sort_values(["similarity", "popularity"], ascending=[False, False], kind="stable")
+    key, closer_first = ("distance", True) if method == "euc" else ("similarity", False)
+    result = (result.sort_values([key, "popularity"], ascending=[closer_first, False], kind="stable")
               .drop_duplicates(["_title", "_artist"]).head(top_n).copy())
     result.insert(0, "rank", range(1, len(result) + 1))
     result["url"] = result.track_id.map(spotify_url)
@@ -121,24 +134,32 @@ def render_similar(catalog: Catalog):
     with st.sidebar:
         st.header("表示の設定")
         top_n = st.slider("表示する曲数", 5, 20, 10, key="_similar_top_n")
-        use_pop = st.checkbox("人気度で絞り込む（まだ知らない曲を探す）", key="_similar_use_pop")
-        max_pop = st.slider("人気度の上限", 0, 100, 30, key="_similar_max_pop") if use_pop else None
-        other_genre = st.checkbox("選んだ曲と別のジャンルだけにする", key="_similar_other_genre")
-
-    result = find_similar(tracks, similarity_matrix(tracks), base.track_id, top_n, max_pop, other_genre)
+    # 絞り込み条件（人気度の上限・同じジャンルの除外・測り方）は共通の filters を使う
+    cond = render_filters()
+    max_pop = cond["pop_max"] if cond["pop_max"] < 100 else None
+    euclid = cond["method"] == "euc"
+    matrix = standardized_matrix(tracks) if euclid else similarity_matrix(tracks)
+    result = find_similar(tracks, matrix, base.track_id, top_n, max_pop, cond["other_genre"], cond["method"])
     if result.empty:
-        st.warning("条件に合う曲がありません。絞り込み条件をゆるめてください。")
+        show_no_result()
         st.stop()
     result["reason"] = [" と ".join(closest_features(base, row)) + "が近い" for _, row in result.iterrows()]
 
     st.subheader("似ている曲のランキング")
-    table = result[["rank", "track_name", "artists", "genres", "popularity", "similarity", "reason", "url"]]
+    st.caption(describe_filters(cond))
+    score = "distance" if euclid else "similarity"
+    table = result[["rank", "track_name", "artists", "genres", "popularity", score, "reason", "url"]]
     st.dataframe(table, hide_index=True, width="stretch", column_config={
         "rank": "順位", "track_name": "曲名", "artists": "アーティスト", "genres": "ジャンル",
-        "popularity": "人気度", "similarity": st.column_config.NumberColumn("類似度", format="%.3f"),
+        "popularity": "人気度",
+        "similarity": st.column_config.NumberColumn("類似度", format="%.3f"),
+        "distance": st.column_config.NumberColumn("距離", format="%.3f"),
         "reason": "似ている理由", "url": st.column_config.LinkColumn("Spotify", display_text="開く"),
     })
-    st.caption("類似度は−1〜1で、1に近いほど似ています。4つの特徴を標準化し、ベクトルの向き（特徴のバランス）で比べています。")
+    if euclid:
+        st.caption("距離は0以上で、0に近いほど似ています。4つの特徴を標準化し、値そのものの近さで比べています。")
+    else:
+        st.caption("類似度は−1〜1で、1に近いほど似ています。4つの特徴を標準化し、ベクトルの向き（特徴のバランス）で比べています。")
 
     left, right = st.columns(2)
     with left:

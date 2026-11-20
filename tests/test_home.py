@@ -43,6 +43,27 @@ class HomePageTests(unittest.TestCase):
         self.assertTrue(any("Comedy" in x.value for x in app.markdown))
         self.assertFalse(any("まだ曲が選ばれていません" in x.value for x in app.info))
 
+    def test_similar_page_uses_shared_filters(self):
+        app = self.app()
+        app.session_state["selected_track_id"] = COMEDY
+        app.run()
+        app.switch_page("pages/似ている楽曲.py").run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.sidebar.radio(key="_filter_method").value, "コサイン類似度")
+        app.sidebar.radio(key="_filter_method").set_value("ユークリッド距離").run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("0に近いほど似ています" in x.value for x in app.caption))
+        app.sidebar.slider(key="_filter_pop_max").set_value(0).run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("条件：人気度0以下" in x.value for x in app.caption))
+        self.assertTrue(app.dataframe[0].value["popularity"].le(0).all())
+
+    def test_grouping_page_uses_shared_data(self):
+        app = self.app().run()
+        app.switch_page("pages/グループ分け.py").run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("該当: 59曲" in x.value for x in app.subheader))
+
 
 if __name__ == "__main__":
     unittest.main()
