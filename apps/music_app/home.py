@@ -37,8 +37,12 @@ def render_selected(song: dict | None):
             st.page_link(SEARCH, label="別の曲を選び直す", icon="🔍")
 
 
-def render_home(catalog: Catalog):
-    st.title("似ている曲から、まだ知らない好きな曲へ")
+def render_home(catalog: Catalog, show_title: bool = True):
+    """show_title=False のときは、ページのタイトルを main.py 側に任せて副題から表示する。"""
+    if show_title:
+        st.title("似ている曲から、まだ知らない好きな曲へ")
+    else:
+        st.subheader("似ている曲から、まだ知らない好きな曲へ")
     st.write("好きな曲を1曲選ぶと、テンポ・力強さ・明るさ・ノリの良さといった**音の特徴**が近い曲を探します。"
              "人気度やジャンルに関係なく探せるので、ランキングには出てこない曲とも出会えます。")
 
