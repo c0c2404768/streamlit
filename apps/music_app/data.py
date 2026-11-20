@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from io import BytesIO
 import os
+import traceback
 from pathlib import Path
 import unicodedata
 from urllib.request import urlopen
@@ -50,7 +51,11 @@ def read_csv_bytes(content: bytes) -> pd.DataFrame:
 def index_tracks(tracks: pd.DataFrame, genre_rows: pd.DataFrame) -> pd.DataFrame:
     tracks = tracks.copy().reset_index(drop=True)
     genres = genre_rows.groupby("track_id", sort=False).track_genre.agg(lambda values: " / ".join(sorted(set(values))))
-    tracks["genres"] = tracks.track_id.map(genres).fillna("未登録")
+    # 環境によっては map の結果が数値型（pyarrow の double）になり、fillna で文字を入れると
+    # 「Could not convert '未登録' ... to double」になるため、文字の列として作り直す
+    mapped = tracks.track_id.map(genres)
+    tracks["genres"] = pd.Series(np.where(mapped.isna(), "未登録", mapped.astype(object)),
+                                 index=tracks.index, dtype=object)
     tracks["_title"] = tracks.track_name.map(normalize_text)
     tracks["_artist"] = tracks.artists.map(normalize_text)
     if "_aliases" not in tracks:
@@ -193,7 +198,7 @@ def catalog_for_page() -> Catalog:
     except (OSError, ValueError, UnicodeError, pd.errors.ParserError) as exc:
         st.error("楽曲データを読み込めませんでした。ネットワーク接続を確認するか、左の「データの設定」からCSVを選んでください。")
         with st.expander("エラーの詳細"):
-            st.code(str(exc), language=None)
+            st.code(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", language=None)
         st.stop()
     if catalog.tracks.empty:
         st.warning("利用できる楽曲が0件です。CSVの内容を確認してください。")
