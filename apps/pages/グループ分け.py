@@ -14,9 +14,10 @@ st.set_page_config(
 # ---------------------------------------------------------
 # 1. 共通関数でデータ取得 ＋ KMeans法による3グループ自動分類
 # ---------------------------------------------------------
-@st.cache_data
-def get_clustered_catalog():
-    df = catalog_for_page().copy()
+@st.cache_data(show_spinner="グループ分けを計算しています…")
+def get_clustered_catalog(tracks: pd.DataFrame):
+    # catalog_for_page() は画面の部品（データの設定）を出すので、キャッシュする関数の外で呼ぶ
+    df = tracks.copy()
 
     # 列名の自動判別（music_app.data のカラム名に柔軟に対応）
     track_col = next((c for c in ["track_name", "name", "title", "song_name", "曲名"] if c in df.columns), df.columns[0])
@@ -47,7 +48,7 @@ def get_clustered_catalog():
     df["ムード（グループ）"] = df["cluster"].map(label_map)
     return df, track_col, artist_col
 
-df, TRACK_COL, ARTIST_COL = get_clustered_catalog()
+df, TRACK_COL, ARTIST_COL = get_clustered_catalog(catalog_for_page().tracks)
 
 # ---------------------------------------------------------
 # 2. タイトル・導入文
@@ -65,7 +66,7 @@ with st.container(border=True):
     with col1:
         keyword = st.text_input(
             "キーワード検索（曲名・アーティスト名）",
-            placeholder="例: Sample Song / Artist..."
+            placeholder="例: Lemon / Kenshi Yonezu"
         )
 
     with col2:
@@ -120,8 +121,10 @@ with col_chart:
         "🌙 バラード・チル系（静か・落ち着き）": "#4EA8DE",
         "🔥 ロック・エナジー系（激しい・スピード感）": "#EF476F",
     }
+    MAP_LIMIT = 5000  # 点が多すぎると表示が重くなるため、地図に出す曲数の上限
+    map_df = filtered_df.sample(n=MAP_LIMIT, random_state=0) if len(filtered_df) > MAP_LIMIT else filtered_df
     fig = px.scatter(
-        filtered_df,
+        map_df,
         x="valence",
         y="energy",
         color="ムード（グループ）",
@@ -134,16 +137,18 @@ with col_chart:
         }
     )
     fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
+    if len(filtered_df) > MAP_LIMIT:
+        st.caption(f"該当する{len(filtered_df):,}曲のうち、{MAP_LIMIT:,}曲をランダムに選んで表示しています。")
 
 with col_list:
-    st.subheader(f"🎶 検索結果（該当: {len(filtered_df)}曲）")
+    st.subheader(f"🎶 検索結果（該当: {len(filtered_df):,}曲）")
     display_df = filtered_df[[TRACK_COL, ARTIST_COL, "ムード（グループ）", "tempo"]].rename(columns={
         TRACK_COL: "曲名",
         ARTIST_COL: "アーティスト",
         "tempo": "BPM"
     })
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    st.dataframe(display_df, width="stretch", hide_index=True)
 
 st.divider()
 
@@ -181,7 +186,7 @@ with c3:
 with st.expander("📊 グループごとの平均値データと分析の根拠を見る"):
     st.subheader("各グループの音響特徴量（平均値）")
     mean_df = df.groupby("ムード（グループ）")[["tempo", "energy", "valence", "danceability"]].mean().round(2)
-    st.dataframe(mean_df, use_container_width=True)
+    st.dataframe(mean_df, width="stretch")
     st.markdown("""
     *💡 分析のポイント（なぜこの散布図なのか？）*
     - 4つの指標のうち、特に **Energy（激しさ）** と **Valence（明るさ）** の2軸を組み合わせることで、3つのグループが最も明確に分離されることが確認されています。
