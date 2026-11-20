@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps"))
 
 from music_app.data import prepare_catalog
-from music_app.similar import closest_features, find_similar, radar_points, similarity_matrix, spotify_url
+from music_app.similar import closest_features, find_similar, radar_points, similarity_matrix, standardized_matrix, spotify_url
 
 
 def fixture():
@@ -62,6 +62,14 @@ class SimilarTests(unittest.TestCase):
         points = radar_points(self.tracks, base, result)
         self.assertEqual(len(points), 4 * 5)  # 4曲 × (4特徴 + 閉じる点)
         self.assertTrue(points["値"].between(0, 1).all())
+
+    def test_euclidean_ranking(self):
+        z = standardized_matrix(self.tracks)
+        result = find_similar(self.tracks, z, "base", top_n=10, method="euc")
+        self.assertNotIn("similarity", result.columns)
+        self.assertTrue(result.distance.is_monotonic_increasing)
+        self.assertTrue(result.distance.ge(0).all())
+        self.assertNotIn("copy", result.track_id.tolist())
 
 
 if __name__ == "__main__":
