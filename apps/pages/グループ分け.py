@@ -5,6 +5,8 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import streamlit as st
 
+from music_app.data import catalog_for_page
+
 st.set_page_config(
     page_title="グループ分け - 楽曲ムード分析",
     page_icon="🎵",
@@ -20,24 +22,11 @@ st.markdown(
 # ---------------------------------------------------------
 # 1. データの読み込みとKMeansモデルの学習
 # ---------------------------------------------------------
-@st.cache_data
-def load_and_cluster_data():
-  # ※実際のCSVパスに合わせて変更してください
-  # df = pd.read_csv("dataset (1).csv", encoding="cp932")
-
-  # デモ用サンプルデータ（実データ読み込み時は削除）
-  np.random.seed(42)
-  n_samples = 150
-  df = pd.DataFrame({
-      "track_name": [f"Sample Song {i+1}" for i in range(n_samples)],
-      "artist_name": [
-          f"Artist {np.random.randint(1, 30)}" for _ in range(n_samples)
-      ],
-      "tempo": np.random.uniform(70, 175, n_samples),
-      "energy": np.random.uniform(0.1, 0.98, n_samples),
-      "valence": np.random.uniform(0.05, 0.95, n_samples),
-      "danceability": np.random.uniform(0.2, 0.95, n_samples),
-  })
+@st.cache_data(show_spinner="グループ分けを計算しています…")
+def load_and_cluster_data(tracks: pd.DataFrame):
+  # 共通データ（曲の検索・選択などと同じ曲）を使う
+  df = tracks[["track_id", "track_name", "artists", "tempo", "energy", "valence", "danceability"]].copy()
+  df = df.rename(columns={"artists": "artist_name"})
 
   features = ["tempo", "energy", "valence", "danceability"]
   X = df[features].copy()
@@ -81,7 +70,7 @@ def load_and_cluster_data():
   return df_clean
 
 
-df = load_and_cluster_data()
+df = load_and_cluster_data(catalog_for_page().tracks)
 
 # ---------------------------------------------------------
 # 2. ページ上部：検索・フィルターエリア（横並び3カラム）
@@ -94,7 +83,7 @@ with st.container(border=True):
   with search_col1:
     search_query = st.text_input(
         "キーワード検索（曲名・アーティスト名）",
-        placeholder="例: Sample Song / Artist...",
+        placeholder="例: Lemon / Kenshi Yonezu",
     )
 
   with search_col2:
@@ -139,8 +128,10 @@ col1, col2 = st.columns([1.3, 1])
 
 with col1:
   st.subheader("📊 楽曲ムードマップ（Valence × Energy）")
+  MAP_LIMIT = 5000  # 点が多すぎると表示が重くなるため、地図に出す曲数の上限
+  map_df = filtered_df.sample(n=MAP_LIMIT, random_state=0) if len(filtered_df) > MAP_LIMIT else filtered_df
   fig = px.scatter(
-      filtered_df,
+      map_df,
       x="valence",
       y="energy",
       color="mood",
@@ -172,10 +163,12 @@ with col1:
           orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
       ),
   )
-  st.plotly_chart(fig, use_container_width=True)
+  st.plotly_chart(fig, width="stretch")
+  if len(filtered_df) > MAP_LIMIT:
+    st.caption(f"該当する{len(filtered_df):,}曲のうち、{MAP_LIMIT:,}曲をランダムに選んで表示しています。")
 
 with col2:
-  st.subheader(f"🎶 検索結果（該当: {len(filtered_df)}曲）")
+  st.subheader(f"🎶 検索結果（該当: {len(filtered_df):,}曲）")
 
   if len(filtered_df) > 0:
     display_cols = [
@@ -197,10 +190,13 @@ with col2:
     ]
 
     st.dataframe(
-        display_df.style.format(
-            {"BPM": "{:.1f}", "Energy": "{:.2f}", "Valence": "{:.2f}"}
-        ),
-        use_container_width=True,
+        display_df,
+        column_config={
+            "BPM": st.column_config.NumberColumn(format="%.1f"),
+            "Energy": st.column_config.NumberColumn(format="%.2f"),
+            "Valence": st.column_config.NumberColumn(format="%.2f"),
+        },
+        width="stretch",
         height=440,
         hide_index=True,
     )
@@ -271,7 +267,7 @@ with st.expander("📊 グループごとの平均値データと分析の根拠
           "Valence（明るさ）": "{:.2f}",
           "Danceability（踊りやすさ）": "{:.2f}",
       }),
-      use_container_width=True,
+      width="stretch",
       hide_index=True,
   )
 
