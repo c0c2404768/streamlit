@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps"))
 
 from music_app.data import FEATURES, TUNEBAT_CSV, add_tunebat_tracks, dataset_source, prepare_catalog, read_csv_bytes
-from music_app.genre import genre_statistics, heatmap_values, pairwise_statistics
+from music_app.genre import comparison_takeaway, distribution_bins, genre_statistics, pairwise_statistics, summary_for_display
 from music_app.search import UNREGISTERED, search_tracks, tracks_in_genre
 from music_app.selection import select_track, selected_track
 
@@ -128,7 +128,7 @@ class DataAndSearchTests(unittest.TestCase):
         self.assertIsNone(selected_track(self.catalog.tracks.iloc[0:0], state))
         self.assertNotIn("selected_track_id", state)
 
-    def test_quartiles_pairs_and_heatmap(self):
+    def test_quartiles_and_pairs(self):
         rows = self.catalog.genre_rows[self.catalog.genre_rows.track_genre.eq("pop")].copy()
         rows.loc[:, "tempo"] = [100, 120, 140]
         summary = genre_statistics(rows, ("tempo",))
@@ -138,8 +138,24 @@ class DataAndSearchTests(unittest.TestCase):
         pairs = pairwise_statistics(full, ["pop", "rock", "jazz"])
         self.assertEqual(len(pairs), 24)
         self.assertTrue((pairs["中央値の差"] >= 0).all())
-        heat = heatmap_values(full)
-        self.assertTrue(heat.z.notna().all())
+        display = summary_for_display(summary)
+        self.assertEqual(display.columns[:3].tolist(), ["特徴量", "ジャンル", "曲数"])
+        self.assertEqual(display.iloc[0]["特徴量"], "テンポ（BPM）")
+
+    def test_tempo_takeaway_groups_nearly_equal_genres(self):
+        typical = pd.Series({"j-pop": 123.85, "rock": 123.87, "jazz": 109.19})
+        self.assertIn("**j-pop・rock** はほぼ同じ速さ", comparison_takeaway(typical, "tempo"))
+        self.assertIn("**jazz** は「ゆっくり」寄り", comparison_takeaway(typical, "tempo"))
+        self.assertEqual(comparison_takeaway(typical.drop("jazz"), "tempo"),
+                         "比べたジャンル同士は、ほぼ同じ速さです。")
+
+    def test_distribution_counts_include_maximum_and_use_each_genre_as_denominator(self):
+        rows = pd.DataFrame({"track_genre": ["pop", "pop", "rock"], "energy": [0, 1, 1]})
+        points, domain = distribution_bins(rows, "energy", None)
+        self.assertEqual(domain, [0, 1])
+        self.assertEqual(points.groupby("genre")["count"].sum().to_dict(), {"pop": 2, "rock": 1})
+        self.assertEqual(points.groupby("genre").share.sum().to_dict(), {"pop": 1.0, "rock": 1.0})
+        self.assertEqual(points.query("genre == 'rock' and share == 1").shape[0], 1)
 
     def test_missing_explicit_path_does_not_fall_back(self):
         with patch.dict(os.environ, {"SPOTIFY_DATASET_PATH": str(ROOT / "not_present.csv")}):
@@ -184,6 +200,7 @@ class PageTests(unittest.TestCase):
         app.switch_page("pages/ジャンル比較.py").run()
         self.assertFalse(app.exception)
         self.assertEqual(len(app.selectbox(key="_genre_feature").options), 8)
+        self.assertTrue(any("大きな点がある場所ほど" in x.value for x in app.caption))
         self.assertTrue(any("Comedy" in x.value for x in app.info))
         app.button(key="_genre_use_selected").click().run()
         self.assertEqual(app.multiselect(key="genre_choices").value, ["pop", "rock"])
