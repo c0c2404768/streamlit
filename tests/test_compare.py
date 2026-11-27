@@ -1,4 +1,4 @@
-"""似ている曲の人気度ページ（小林担当）のテスト。小さいCSVで、外部ネットワークなしで実行できる。"""
+"""似ている曲との人気度比較ページ（小林担当）のテスト。小さいCSVで、外部ネットワークなしで実行できる。"""
 import os
 from pathlib import Path
 import sys
@@ -75,6 +75,8 @@ class ComparePageTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertGreater(len(options), 1)
         self.assertTrue(any("（" in o and "）" in o for o in options[1:]))  # 「日本語（英語）」の表示
+        self.assertTrue(any("似ている曲との人気度比較" in x.value for x in app.title))
+        self.assertFalse(any("分析の詳細を見る" in x.proto.label for x in app.get("page_link")))
 
 
 if __name__ == "__main__":
