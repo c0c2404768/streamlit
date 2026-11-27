@@ -24,6 +24,12 @@ COMEDY = "5SuOikwiRyPMVoIQDJUgSV"
 GHOST = "4qPNDBW1i3p13qLCt0Ki3A"
 
 
+def pick_track(app, track_id):
+    """検索結果の表で行をクリックしたのと同じ状態にする（AppTest では表のクリックを再現できないため）。"""
+    app.session_state["selected_track_id"] = track_id
+    app.run()
+
+
 def fixture():
     def song(track_id, title, artist, genre, tempo, popularity=30, album="Album"):
         return dict(track_id=track_id, track_name=title, artists=artist, album_name=album,
@@ -220,8 +226,7 @@ class PageTests(unittest.TestCase):
         self.assertFalse(app.exception)
         app.text_input(key="_search_query").set_value("comedy gen").run()
         self.assertEqual(app.number_input(key="_search_page").value, 1)
-        app.selectbox(key="_search_pick").set_value(COMEDY).run()
-        app.button(key="_search_confirm").click().run()
+        pick_track(app, COMEDY)
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["selected_track_id"], COMEDY)
         app.text_input(key="_search_query").set_value("missing_song").run()
@@ -264,8 +269,7 @@ class PageTests(unittest.TestCase):
 
         app = self.app()
         app.text_input(key="_search_query").set_value("Comedy").run()
-        app.selectbox(key="_search_pick").set_value(COMEDY).run()
-        app.button(key="_search_confirm").click().run()
+        pick_track(app, COMEDY)
         app.switch_page("pages/グループ分け.py").run()
 
         self.assertFalse(app.exception)
@@ -289,8 +293,7 @@ class PageTests(unittest.TestCase):
 
         app.switch_page("pages/曲の検索・選択.py").run()
         app.text_input(key="_search_query").set_value("Ghost").run()
-        app.selectbox(key="_search_pick").set_value(GHOST).run()
-        app.button(key="_search_confirm").click().run()
+        pick_track(app, GHOST)
         app.switch_page("pages/グループ分け.py").run()
         selected_mood_caption = next(item.value.split(":", 1)[1].strip()
                                      for item in app.caption if item.value.startswith("ムード:"))
@@ -317,8 +320,7 @@ class PageTests(unittest.TestCase):
         app.checkbox(key="_search_only_added").check().run()
         app.text_input(key="_search_query").set_value("竹内まりや").run()
         self.assertEqual(len(app.dataframe[0].value), 1)
-        app.selectbox(key="_search_pick").set_value("new-track").run()
-        app.button(key="_search_confirm").click().run()
+        pick_track(app, "new-track")
         app.switch_page("pages/ジャンル比較.py").run()
         self.assertFalse(app.exception)
         self.assertFalse(any(x.key == "_genre_use_selected" for x in app.button))
@@ -334,7 +336,6 @@ class PageTests(unittest.TestCase):
 
     def test_unselected_and_bad_csv_are_explained(self):
         app = self.app()
-        self.assertTrue(app.button(key="_search_confirm").disabled)
         self.assertTrue(any("検索結果から曲を選び" in x.value for x in app.info))
         self.path.write_text("wrong_column\n1\n", encoding="utf-8")
         app.run()
