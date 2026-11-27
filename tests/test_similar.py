@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps"))
 
 from music_app.data import prepare_catalog
-from music_app.similar import closest_features, find_similar, radar_points, similarity_matrix, standardized_matrix, spotify_url
+from music_app.similar import (closest_features, find_similar, radar_features, radar_points, radar_spec,
+                               similarity_matrix, standardized_matrix, spotify_url)
 
 
 def fixture():
@@ -62,6 +63,27 @@ class SimilarTests(unittest.TestCase):
         points = radar_points(self.tracks, base, result)
         self.assertEqual(len(points), 4 * 5)  # 4曲 × (4特徴 + 閉じる点)
         self.assertTrue(points["値"].between(0, 1).all())
+
+    def test_radar_more_features(self):
+        tracks = self.tracks.copy()
+        tracks["acousticness"] = 0.3
+        tracks["speechiness"] = 0.1
+        tracks["duration_min"] = np.linspace(2, 8, len(tracks))
+        tracks.loc[tracks.track_id.eq("near-jazz"), "speechiness"] = np.nan  # Tunebatの追加曲のように値がない
+        rows = tracks.set_index("track_id")
+        base = rows.loc["base"]
+        self.assertEqual(radar_features(tracks, [base, rows.loc["near-pop"]]),
+                         ["tempo", "energy", "valence", "danceability", "acousticness", "speechiness", "duration_min"])
+        self.assertNotIn("speechiness", radar_features(tracks, [base, rows.loc["near-jazz"]]))
+        result = find_similar(tracks, similarity_matrix(tracks), "base", top_n=3)
+        feats = radar_features(tracks, [base] + [r for _, r in result.iterrows()])
+        points = radar_points(tracks, base, result, feats)
+        self.assertEqual(len(points), 4 * (len(feats) + 1))
+        self.assertTrue(points["値"].between(0, 1).all())
+        names = ["選んだ曲"] + [f"{r['rank']}位 {r.track_name}" for _, r in result.iterrows()]
+        spec = radar_spec(points, names, feats)
+        texts = [t for layer in spec["layer"] if layer["mark"]["type"] == "text" for t in layer["data"]["values"]]
+        self.assertEqual(len(texts), len(feats))
 
     def test_euclidean_ranking(self):
         z = standardized_matrix(self.tracks)
