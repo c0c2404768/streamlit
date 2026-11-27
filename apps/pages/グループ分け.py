@@ -4,6 +4,7 @@ import plotly.express as px
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from music_app.data import catalog_for_page
+from music_app.selection import selected_track
 
 st.set_page_config(
     page_title="グループ分け - 楽曲ムード分析",
@@ -49,6 +50,7 @@ def get_clustered_catalog(tracks: pd.DataFrame):
     return df, track_col, artist_col
 
 df, TRACK_COL, ARTIST_COL = get_clustered_catalog(catalog_for_page().tracks)
+selected_song = selected_track(df)
 
 # ---------------------------------------------------------
 # 2. タイトル・導入文
@@ -106,6 +108,8 @@ filtered_df = filtered_df[
     (filtered_df["tempo"] >= bpm_range[0]) &
     (filtered_df["tempo"] <= bpm_range[1])
 ]
+SEARCH_RESULT_LIMIT = 100
+search_results = filtered_df.head(SEARCH_RESULT_LIMIT)
 
 st.divider()
 
@@ -137,18 +141,37 @@ with col_chart:
         }
     )
     fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+    if selected_song is not None:
+        fig.add_scatter(
+            x=[selected_song["valence"]],
+            y=[selected_song["energy"]],
+            mode="markers",
+            marker={"size": 17, "symbol": "star", "color": "#111827", "line": {"width": 2, "color": "white"}},
+            name="選択中の曲",
+            text=[f"{selected_song['track_name']} / {selected_song['artists']}"],
+            hovertemplate="%{text}<br>Valence=%{x}<br>Energy=%{y}<extra></extra>",
+        )
     st.plotly_chart(fig, width="stretch")
     if len(filtered_df) > MAP_LIMIT:
         st.caption(f"該当する{len(filtered_df):,}曲のうち、{MAP_LIMIT:,}曲をランダムに選んで表示しています。")
+    if selected_song is not None:
+        st.caption("★は「曲の検索・選択」で選んだ曲です。")
 
 with col_list:
     st.subheader(f"🎶 検索結果（該当: {len(filtered_df):,}曲）")
-    display_df = filtered_df[[TRACK_COL, ARTIST_COL, "ムード（グループ）", "tempo"]].rename(columns={
+    if selected_song is not None:
+        st.text(f"選択中の曲: {selected_song['track_name']} / {selected_song['artists']}")
+        st.caption(f"ムード: {selected_song['ムード（グループ）']}")
+    else:
+        st.page_link("pages/曲の検索・選択.py", label="曲を検索・選択してムードマップに表示", icon="🔍")
+    display_df = search_results[[TRACK_COL, ARTIST_COL, "ムード（グループ）", "tempo"]].rename(columns={
         TRACK_COL: "曲名",
         ARTIST_COL: "アーティスト",
         "tempo": "BPM"
     })
     st.dataframe(display_df, width="stretch", hide_index=True)
+    if len(filtered_df) > SEARCH_RESULT_LIMIT:
+        st.caption(f"検索結果一覧は先頭{SEARCH_RESULT_LIMIT}曲まで表示しています。条件を追加すると絞り込めます。")
 
 st.divider()
 
