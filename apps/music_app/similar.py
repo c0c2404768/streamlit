@@ -4,12 +4,13 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from music_app.data import CORE_FEATURES, Catalog, LABELS
+from music_app.data import CORE_FEATURES, FEATURES as ALL_FEATURES, Catalog, LABELS
 from music_app.filters import describe_filters, render_filters, show_no_result
 from music_app.selection import selected_track
 
 FEATURES = CORE_FEATURES  # テンポ・力強さ・明るさ・ノリの良さ（班で共通の4特徴）
 COLORS = ["#C55A11", "#2E8B6A", "#1B4D3E", "#8FB8A8"]
+RADAR_FEATURES = ALL_FEATURES  # 比較グラフに出せる特徴（4特徴＋アコースティックらしさなど4つ）
 
 
 @st.cache_data(show_spinner=False)
@@ -64,49 +65,85 @@ def closest_features(base, row, n=2) -> list[str]:
     return [LABELS[f] for f in sorted(diffs, key=diffs.get)[:n]]
 
 
-def radar_points(tracks: pd.DataFrame, base, rows: pd.DataFrame) -> pd.DataFrame:
-    """レーダーチャート用に、各曲の4特徴を円周上のx, y座標に変換する。"""
-    tempo_max = tracks.tempo.max()
-    angles = np.pi / 2 - 2 * np.pi * np.arange(len(FEATURES)) / len(FEATURES)
+def radar_features(tracks: pd.DataFrame, songs: list) -> list[str]:
+    """比較グラフに出せる特徴。列がない特徴や、表示する曲のどれかで値が空（Tunebatの追加曲など）の特徴は除く。"""
+    usable = []
+    for f in RADAR_FEATURES:
+        if f in tracks.columns and all(pd.notna(pd.to_numeric(song.get(f), errors="coerce")) for song in songs):
+            usable.append(f)
+    return usable
+
+
+def _scale(tracks: pd.DataFrame, feature: str) -> float:
+    """0〜1にそろえるための割る数。テンポは最大値、曲の長さは極端に長い曲に引っぱられないよう上位1%の値。"""
+    values = pd.to_numeric(tracks[feature], errors="coerce")
+    if feature == "tempo":
+        top = values.max()
+    elif feature == "duration_min":
+        top = values.quantile(0.99)
+    else:
+        return 1.0
+    return float(top) if pd.notna(top) and top > 0 else 1.0
+
+
+def radar_points(tracks: pd.DataFrame, base, rows: pd.DataFrame, features=FEATURES) -> pd.DataFrame:
+    """レーダーチャート用に、各曲の特徴を円周上のx, y座標に変換する（値は0〜1）。"""
+    features = list(features)
+    scales = {f: _scale(tracks, f) for f in features}
+    angles = np.pi / 2 - 2 * np.pi * np.arange(len(features)) / len(features)
     points = []
     songs = [("選んだ曲", base)] + [(f"{r['rank']}位 {r.track_name}", r) for _, r in rows.iterrows()]
     for order, (name, song) in enumerate(songs):
-        values = [song.tempo / tempo_max] + [song[f] for f in FEATURES[1:]]
-        for k in range(len(FEATURES) + 1):  # 最初の点に戻って図形を閉じる
-            i = k % len(FEATURES)
-            points.append({"曲": name, "順": order, "k": k, "特徴": LABELS[FEATURES[i]],
-                           "値": round(float(values[i]), 3),
+        values = [min(max(float(song[f]) / scales[f], 0.0), 1.0) for f in features]
+        for k in range(len(features) + 1):  # 最初の点に戻って図形を閉じる
+            i = k % len(features)
+            raw = float(song[features[i]])
+            points.append({"曲": name, "順": order, "k": k, "特徴": LABELS[features[i]],
+                           "値": round(values[i], 3), "元の値": round(raw, 3),
                            "x": values[i] * np.cos(angles[i]), "y": values[i] * np.sin(angles[i])})
     return pd.DataFrame(points)
 
 
-def radar_spec(points: pd.DataFrame, names: list[str]) -> dict:
-    angles = np.pi / 2 - 2 * np.pi * np.arange(len(FEATURES)) / len(FEATURES)
-    grid = [{"x": r * np.cos(a), "y": r * np.sin(a), "r": r, "k": k % len(FEATURES)}
+def radar_spec(points: pd.DataFrame, names: list[str], features=FEATURES) -> dict:
+    features = list(features)
+    angles = np.pi / 2 - 2 * np.pi * np.arange(len(features)) / len(features)
+    grid = [{"x": r * np.cos(a), "y": r * np.sin(a), "r": r, "k": k}
             for r in (0.25, 0.5, 0.75, 1.0) for k, a in enumerate([*angles, angles[0]])]
-    labels = [{"x": 1.18 * np.cos(a), "y": 1.12 * np.sin(a), "label": LABELS[f]}
-              for f, a in zip(FEATURES, angles)]
-    axis = {"axis": None, "scale": {"domain": [-1.3, 1.3]}}
+    spokes = [{"x": v * np.cos(a), "y": v * np.sin(a), "s": i, "k": v}
+              for i, a in enumerate(angles) for v in (0, 1)]
+    labels = []
+    for f, a in zip(features, angles):
+        c = np.cos(a)
+        # 左右の文字は外側に向けて寄せ、上下は中央ぞろえにして、文字が図の外にはみ出さないようにする
+        align = "center" if abs(c) < 0.2 else ("left" if c > 0 else "right")
+        labels.append({"x": 1.1 * c, "y": 1.1 * np.sin(a), "label": LABELS[f], "align": align})
+    axis = {"axis": None, "scale": {"domain": [-1.75, 1.75], "nice": False}}
+    xy = {"x": {"field": "x", "type": "quantitative", **axis},
+          "y": {"field": "y", "type": "quantitative", **axis}}
+    label_layer = lambda align: {
+        "data": {"values": [l for l in labels if l["align"] == align]},
+        "mark": {"type": "text", "fontSize": 12, "align": align, "baseline": "middle"},
+        "encoding": {**xy, "text": {"field": "label"}}}
     return {
-        "height": 380,
+        "height": 460,
+        "padding": {"top": 10, "bottom": 10, "left": 10, "right": 10},
         "layer": [
             {"data": {"values": grid}, "mark": {"type": "line", "color": "#D9D9D9", "strokeWidth": 1},
-             "encoding": {"x": {"field": "x", "type": "quantitative", **axis},
-                          "y": {"field": "y", "type": "quantitative", **axis},
-                          "detail": {"field": "r"}, "order": {"field": "k"}}},
-            {"data": {"values": labels}, "mark": {"type": "text", "fontSize": 13},
-             "encoding": {"x": {"field": "x", "type": "quantitative", **axis},
-                          "y": {"field": "y", "type": "quantitative", **axis},
-                          "text": {"field": "label"}}},
+             "encoding": {**xy, "detail": {"field": "r"}, "order": {"field": "k"}}},
+            {"data": {"values": spokes}, "mark": {"type": "line", "color": "#E6E6E6", "strokeWidth": 1},
+             "encoding": {**xy, "detail": {"field": "s"}, "order": {"field": "k"}}},
+            *[label_layer(a) for a in ("center", "left", "right")],
             {"data": {"values": points.to_dict("records")},
              "mark": {"type": "line", "point": True, "strokeWidth": 2},
-             "encoding": {"x": {"field": "x", "type": "quantitative", **axis},
-                          "y": {"field": "y", "type": "quantitative", **axis},
+             "encoding": {**xy,
                           "color": {"field": "曲", "type": "nominal", "sort": names,
                                     "scale": {"domain": names, "range": COLORS[:len(names)]},
-                                    "legend": {"orient": "bottom", "columns": 2, "title": None}},
+                                    "legend": {"orient": "bottom", "columns": 1, "title": None,
+                                               "labelLimit": 360, "labelFontSize": 12}},
                           "order": {"field": "k"},
-                          "tooltip": [{"field": "曲"}, {"field": "特徴"}, {"field": "値"}]}},
+                          "tooltip": [{"field": "曲"}, {"field": "特徴"},
+                                      {"field": "値", "title": "グラフ上の値（0〜1）"},
+                                      {"field": "元の値", "title": "元の値"}]}},
         ],
     }
 
@@ -131,11 +168,14 @@ def render_similar(catalog: Catalog):
     base = tracks.loc[tracks.track_id.eq(song["track_id"])].iloc[0]
     st.info(f"選択中の曲：{base.track_name} / {base.artists}　｜　{base.genres}")
 
-    with st.sidebar:
-        st.header("表示の設定")
-        top_n = st.slider("表示する曲数", 5, 20, 10, key="_similar_top_n")
-    # 絞り込み条件（人気度の上限・同じジャンルの除外・測り方）は共通の filters を使う
-    cond = render_filters()
+    # 絞り込み条件と表示の設定はサイドバーではなくページ内に置く（共通の filters を where 指定で使う）
+    with st.container(border=True):
+        set_left, set_right = st.columns([1, 2])
+        with set_left:
+            st.subheader("表示の設定")
+            top_n = st.slider("表示する曲数", 5, 20, 10, key="_similar_top_n")
+        with set_right:
+            cond = render_filters(st.container())
     max_pop = cond["pop_max"] if cond["pop_max"] < 100 else None
     euclid = cond["method"] == "euc"
     matrix = standardized_matrix(tracks) if euclid else similarity_matrix(tracks)
@@ -161,13 +201,29 @@ def render_similar(catalog: Catalog):
     else:
         st.caption("類似度は−1〜1で、1に近いほど似ています。4つの特徴を標準化し、ベクトルの向き（特徴のバランス）で比べています。")
 
-    left, right = st.columns(2)
+    left, right = st.columns([3, 2])
     with left:
         st.subheader("特徴の比較（上位3曲）")
         top3 = result.head(3)
         names = ["選んだ曲"] + [f"{r['rank']}位 {r.track_name}" for _, r in top3.iterrows()]
-        st.vega_lite_chart(spec=radar_spec(radar_points(tracks, base, top3), names), width="stretch")
-        st.caption("テンポは最大値で割って0〜1にそろえています。点にカーソルを合わせると値を確認できます。")
+        usable = radar_features(tracks, [base] + [r for _, r in top3.iterrows()])
+        # 曲が変わって出せる特徴が減ったとき、前に選んでいた特徴が残ってエラーにならないようにする
+        kept = st.session_state.get("_similar_radar_features")
+        if kept is not None:
+            st.session_state["_similar_radar_features"] = [f for f in kept if f in usable] or usable
+        chosen = st.multiselect("比べる特徴", usable, default=None if kept is not None else usable,
+                                key="_similar_radar_features",
+                                format_func=LABELS.get, help="3つ以上選ぶとグラフになります")
+        if len(chosen) < 3:
+            st.warning("比べる特徴を3つ以上選んでください。")
+        else:
+            st.vega_lite_chart(spec=radar_spec(radar_points(tracks, base, top3, chosen), names, chosen),
+                               width="stretch")
+        missing = [LABELS[f] for f in RADAR_FEATURES if f not in usable]
+        note = "テンポは最大値、曲の長さは上位1%の長さで割って0〜1にそろえています。点にカーソルを合わせると元の値も確認できます。"
+        if missing:
+            note += f"（{'・'.join(missing)}は値がない曲があるため外しています）"
+        st.caption(note)
     with right:
         st.subheader("試聴")
         pick = st.selectbox("試聴する曲", result.track_id.tolist(), key="_similar_listen",
