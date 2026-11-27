@@ -188,14 +188,14 @@ def render_similar(catalog: Catalog):
     st.subheader("似ている曲のランキング")
     st.caption(describe_filters(cond))
     score = "distance" if euclid else "similarity"
-    table = result[["rank", "track_name", "artists", "genres", "popularity", score, "reason"]]
-    st.dataframe(table, hide_index=True, width="stretch", column_config={
-        "rank": "順位", "track_name": "曲名", "artists": "アーティスト", "genres": "ジャンル",
-        "popularity": "人気度",
-        "similarity": st.column_config.NumberColumn("類似度", format="%.3f"),
-        "distance": st.column_config.NumberColumn("距離", format="%.3f"),
-        "reason": "似ている理由",
-    })
+    # スクロールや並べ替えができない固定の表にする（順位を左端の見出しにする）
+    table = (result[["rank", "track_name", "artists", "genres", "popularity", score, "reason"]]
+             .rename(columns={"rank": "順位", "track_name": "曲名", "artists": "アーティスト",
+                              "genres": "ジャンル", "popularity": "人気度", "similarity": "類似度",
+                              "distance": "距離", "reason": "似ている理由"})
+             .set_index("順位"))
+    table[table.columns[4]] = table[table.columns[4]].map("{:.3f}".format)
+    st.table(table)
 
     left, right = st.columns([3, 2])
     with left:
