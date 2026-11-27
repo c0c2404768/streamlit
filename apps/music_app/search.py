@@ -94,33 +94,23 @@ def render_search(catalog: Catalog):
         table = visible[["track_name", "artists", "album_name", "genres", "popularity", "data_sources"]].rename(columns={
             "track_name": "曲名", "artists": "アーティスト", "album_name": "アルバム", "genres": "ジャンル", "popularity": "人気度", "data_sources": "出典",
         })
-        # 表の行をクリックすると、その曲をそのまま基準の曲にする
+        # 表の行をクリックすると、その曲をそのまま基準の曲にする（左端のチェック欄でも選べる）
         # 検索結果やページが変わったら表を作り直し、前の選択が別の曲に当たらないようにする
         table_key = "_search_table_" + str(abs(hash(tuple(visible.index))))
         event = st.dataframe(table, hide_index=True, width="stretch", key=table_key,
                              on_select="rerun", selection_mode="single-row")
         rows = event.selection.rows
         picked = visible.index[rows[0]] if rows else None
-        # クリックが変わったときだけ選び直す（下の選択欄で別の曲を選んだあとに、表の古い選択で上書きしないため）
+        # クリックが変わったときだけ選び直す（選択の解除後などに、表の古い選択で選び直さないため）
         if picked is not None and st.session_state.get("_search_table_done") != (table_key, picked):
             st.session_state["_search_table_done"] = (table_key, picked)
             select_track(catalog.tracks, picked)
             st.toast("基準にする曲を選択しました。ほかの画面でもこの曲を使えます。")
-        option_labels = {i: f"{row.track_name} / {row.artists} — {row.album_name} [{i[-6:]}]"
-                         for i, row in visible.iterrows()}
-        chosen = st.selectbox(
-            "曲名から選ぶ（表の行をクリックしても選べます）", visible.index.tolist(), index=None,
-            placeholder="曲を選んでください", key="_search_pick",
-            format_func=lambda i: option_labels.get(i, str(i)),
-        )
-        if st.button("この曲を基準にする", disabled=chosen is None, key="_search_confirm", type="primary"):
-            select_track(catalog.tracks, chosen)
-            st.success("基準にする曲を選択しました。ほかの画面でもこの曲を使えます。")
     song = selected_track(catalog.tracks)
     st.divider()
     st.subheader("現在選択している曲")
     if song is None:
-        st.info("検索結果から曲を選び、表の行をクリックするか「この曲を基準にする」を押してください。")
+        st.info("検索結果から曲を選び、表の行をクリックしてください。")
     else:
         st.write(f"**{song['track_name']}**")
         st.write(song["artists"])
