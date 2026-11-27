@@ -20,7 +20,7 @@ page = st.navigation([
     st.Page(home, title="ホーム", icon="🏠", default=True),
     st.Page("pages/曲の検索・選択.py", title="曲の検索・選択", icon="🔍"),
     st.Page("pages/似ている楽曲.py", title="似ている楽曲", icon="🎧"),
-    st.Page("pages/似ている曲の人気度.py", title="似ている曲の人気度", icon="⚖️"),
+    st.Page("pages/似ている曲の人気度.py", title="似ている曲との人気度比較", icon="⚖️"),
     st.Page("pages/ジャンル比較.py", title="ジャンル比較", icon="📊"),
     st.Page("pages/グループ分け.py", title="グループ分け", icon="🧩"),
     # 人気度との関係はホームの「このアプリの根拠」から開く詳細ページなので、左のメニューには出さない
