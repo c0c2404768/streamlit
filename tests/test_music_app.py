@@ -244,7 +244,21 @@ class PageTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["selected_track_id"], COMEDY)
         self.assertTrue(any("選択中の曲: Comedy / Gen Hoshino" in item.value for item in app.text))
+        selected_mood_caption = next(item.value.split(":", 1)[1].strip()
+                                     for item in app.caption if item.value.startswith("ムード:"))
+        self.assertEqual(app.selectbox(key="_group_mood_filter").value, selected_mood_caption)
+        app.selectbox(key="_group_mood_filter").set_value("すべて表示").run()
         self.assertEqual(len(app.dataframe[0].value), 100)
+
+        app.switch_page("pages/曲の検索・選択.py").run()
+        app.text_input(key="_search_query").set_value("Ghost").run()
+        app.selectbox(key="_search_pick").set_value(GHOST).run()
+        app.button(key="_search_confirm").click().run()
+        app.switch_page("pages/グループ分け.py").run()
+        selected_mood_caption = next(item.value.split(":", 1)[1].strip()
+                                     for item in app.caption if item.value.startswith("ムード:"))
+        self.assertEqual(app.session_state["selected_track_id"], GHOST)
+        self.assertEqual(app.selectbox(key="_group_mood_filter").value, selected_mood_caption)
 
     def test_unknown_genre_song_can_be_compared_without_invented_values(self):
         raw = fixture()
