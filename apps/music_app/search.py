@@ -4,7 +4,7 @@ import math
 import pandas as pd
 import streamlit as st
 
-from music_app.data import Catalog, normalize_text
+from music_app.data import ADDED_GENRE_SOURCES, Catalog, normalize_text
 from music_app.selection import clear_selection, select_track, selected_track
 
 PAGE_SIZE = 25
@@ -18,7 +18,10 @@ def tracks_in_genre(catalog: Catalog, genre: str | None) -> pd.DataFrame:
     if genre == UNREGISTERED:
         return catalog.tracks.loc[catalog.tracks.genres.eq("未登録")]
     ids = catalog.genre_rows.loc[catalog.genre_rows.track_genre.eq(genre), "track_id"]
-    return catalog.tracks.loc[catalog.tracks.track_id.isin(ids)]
+    hit = catalog.tracks.track_id.isin(ids)
+    if "genre_source" in catalog.tracks:  # アーティストからジャンルを補った追加曲も、そのジャンルで探せるようにする
+        hit |= catalog.tracks.genre_source.isin(ADDED_GENRE_SOURCES) & catalog.tracks.genres.eq(genre)
+    return catalog.tracks.loc[hit]
 
 
 def search_tracks(tracks: pd.DataFrame, query: str, order="一致順") -> pd.DataFrame:
@@ -70,7 +73,8 @@ def render_search(catalog: Catalog):
         only_added = st.checkbox("追加したTunebatの曲だけ表示", key="_search_only_added", on_change=reset_page)
         if only_added:
             candidates = candidates.loc[candidates.data_sources.str.contains("Tunebat", regex=False, na=False)]
-            st.caption("追加曲のジャンルは未登録です。曲を選ぶと、収録されている音の特徴で既存ジャンルと比較できます。")
+            st.caption("追加曲のジャンルはアーティスト単位で付けています（元データの同じアーティスト → Wikidata → アーティスト単位の判断の順）。"
+                       "ジャンル比較の集計には含めていません。")
     query = st.text_input("曲名・アーティストを検索", placeholder="例：元気を出して / 星野源 / Gen Hoshino", key="_search_query", on_change=reset_page)
     st.caption("大文字・小文字、全角・半角を区別しません。空白で区切ると、すべての語を含む曲を検索します。")
     order = st.selectbox("表示順", ["一致順", "人気度順", "曲名順"], key="_search_order", on_change=reset_page)
