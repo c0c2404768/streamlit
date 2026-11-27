@@ -12,6 +12,8 @@ import pandas as pd
 import pyarrow as pa
 import streamlit as st
 
+from music_app.artist_aliases import JAPANESE_ARTIST_ALIASES
+
 DATASET_URL = "https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset/resolve/refs%2Fconvert%2Fparquet/default/train/0000.parquet"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CORE_FEATURES = ("tempo", "energy", "valence", "danceability")
@@ -29,7 +31,8 @@ TUNEBAT_CSV = Path(__file__).with_name("assets") / "tunebat_tracks.csv"
 # 追加曲のアーティストごとのジャンル（Wikidata のジャンルを114ジャンルに対応させたもの、見つからない場合はアーティスト単位で判断したもの）
 TUNEBAT_GENRES_CSV = Path(__file__).with_name("assets") / "tunebat_artist_genres.csv"
 TUNEBAT_PARQUET = TUNEBAT_CSV.with_suffix(".parquet")
-ARTIST_ALIASES = {"gen hoshino": ("星野源", "ほしのげん"), "mariya takeuchi": ("竹内まりや", "たけうちまりや")}
+ARTIST_ALIASES = {"gen hoshino": ("星野源", "ほしのげん"), "mariya takeuchi": ("竹内まりや", "たけうちまりや"),
+                  **JAPANESE_ARTIST_ALIASES}  # 日本のアーティストは漢字・かなでも検索できるようにする
 
 
 @dataclass
@@ -75,7 +78,8 @@ def index_tracks(tracks: pd.DataFrame, genre_rows: pd.DataFrame) -> pd.DataFrame
         tracks["_aliases"] = ""
     aliases = tracks._aliases.fillna("").map(normalize_text)
     japanese = tracks._artist.map(lambda value: " ".join(alias for artist in value.split(";") for alias in ARTIST_ALIASES.get(artist.strip(), ())))
-    tracks["_search"] = tracks._title + " " + tracks._artist + " " + aliases + " " + japanese
+    # 別名も検索語と同じようにそろえる（「Official髭男dism」などを小文字・全角半角の違いなく探せるように）
+    tracks["_search"] = tracks._title + " " + tracks._artist + " " + aliases + " " + japanese.map(normalize_text)
     return tracks
 
 
