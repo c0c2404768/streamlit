@@ -69,11 +69,12 @@ class ComparePageTests(unittest.TestCase):
         app.run()
         app.switch_page(PAGE).run()
         self.assertFalse(app.exception)
-        self.assertEqual(len(app.get("vega_lite_chart")), 4)  # 似ている3曲＋選んだ曲
+        self.assertEqual(sum("image/svg+xml" in x.proto.body for x in app.get("html")), 4)  # 似ている3曲＋選んだ曲
         options = app.selectbox(key="_compare_genre").options
         app.selectbox(key="_compare_genre").set_value(app.selectbox(key="_compare_genre").options[1]).run()
         self.assertFalse(app.exception)
         self.assertGreater(len(options), 1)
+        self.assertTrue(any("（" in o and "）" in o for o in options[1:]))  # 「日本語（英語）」の表示
 
 
 if __name__ == "__main__":
