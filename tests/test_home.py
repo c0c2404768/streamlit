@@ -43,6 +43,12 @@ class HomePageTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertTrue(any("曲の検索・選択" in x.value for x in app.title))
 
+    def test_popularity_page_still_opens(self):
+        app = self.app().run()
+        app.switch_page("pages/人気度との関係.py").run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("人気度との関係" in x.value for x in app.title))
+
     def test_selected_song_is_shown(self):
         app = self.app()
         app.session_state["selected_track_id"] = COMEDY
