@@ -11,7 +11,11 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps"))
 
-from music_app.data import FEATURES, TUNEBAT_CSV, add_tunebat_tracks, dataset_source, prepare_catalog, read_csv_bytes
+import music_app.data as music_data
+from music_app.data import (
+    FEATURES, TUNEBAT_CSV, add_tunebat_tracks, dataset_source, load_catalog,
+    prepare_catalog, read_csv_bytes, read_table_bytes,
+)
 from music_app.genre import comparison_takeaway, distribution_bins, genre_statistics, pairwise_statistics, summary_for_display
 from music_app.search import UNREGISTERED, search_tracks, tracks_in_genre
 from music_app.selection import select_track, selected_track
@@ -67,6 +71,20 @@ class DataAndSearchTests(unittest.TestCase):
         for encoding in ("utf-8-sig", "cp932"):
             result = read_csv_bytes(raw.to_csv(index=False).encode(encoding))
             self.assertEqual(result.iloc[0].track_name, "日本語の曲")
+
+    def test_parquet_bytes_round_trip(self):
+        raw = fixture().head(1).copy()
+        raw["track_name"] = "日本語の曲"
+        result = read_table_bytes(raw.to_parquet(index=False), "songs.parquet")
+        self.assertEqual(result.iloc[0].track_name, "日本語の曲")
+
+    def test_load_catalog_from_parquet(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "tracks.parquet"
+            fixture().to_parquet(path, index=False)
+            catalog = load_catalog(str(path), path.stat().st_mtime_ns)
+        self.assertEqual(len(catalog.tracks), 59)
+        self.assertEqual(catalog.tracks.iloc[0].track_name, "Comedy")
 
     def test_normalized_multiword_search_and_literal_symbols(self):
         tracks = self.catalog.tracks
@@ -161,6 +179,19 @@ class DataAndSearchTests(unittest.TestCase):
         with patch.dict(os.environ, {"SPOTIFY_DATASET_PATH": str(ROOT / "not_present.csv")}):
             with self.assertRaises(FileNotFoundError):
                 dataset_source()
+
+    def test_dataset_source_prefers_parquet_over_csv(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            data_dir.mkdir()
+            parquet_path = data_dir / "dataset.parquet"
+            csv_path = data_dir / "dataset.csv"
+            parquet_path.touch()
+            csv_path.touch()
+            with patch.object(music_data, "REPOSITORY_ROOT", Path(temporary)), patch.dict(os.environ, {"SPOTIFY_DATASET_PATH": ""}):
+                self.assertEqual(Path(dataset_source()[0]), parquet_path)
+                parquet_path.unlink()
+                self.assertEqual(Path(dataset_source()[0]), csv_path)
 
 
 class PageTests(unittest.TestCase):

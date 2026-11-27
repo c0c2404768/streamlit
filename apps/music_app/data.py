@@ -9,9 +9,10 @@ from urllib.request import urlopen
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import streamlit as st
 
-DATASET_URL = "https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset/resolve/main/dataset.csv"
+DATASET_URL = "https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset/resolve/refs%2Fconvert%2Fparquet/default/train/0000.parquet"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CORE_FEATURES = ("tempo", "energy", "valence", "danceability")
 FEATURES = (*CORE_FEATURES, "acousticness", "instrumentalness", "speechiness", "duration_min")
@@ -25,6 +26,7 @@ UNITS = {feature: "0〜1" for feature in FEATURES}
 UNITS.update(tempo="BPM", duration_min="分")
 META = ("track_id", "track_name", "artists")
 TUNEBAT_CSV = Path(__file__).with_name("assets") / "tunebat_tracks.csv"
+TUNEBAT_PARQUET = TUNEBAT_CSV.with_suffix(".parquet")
 ARTIST_ALIASES = {"gen hoshino": ("星野源", "ほしのげん"), "mariya takeuchi": ("竹内まりや", "たけうちまりや")}
 
 
@@ -46,6 +48,15 @@ def read_csv_bytes(content: bytes) -> pd.DataFrame:
         return pd.read_csv(BytesIO(content), encoding="utf-8-sig", low_memory=False)
     except UnicodeDecodeError:
         return pd.read_csv(BytesIO(content), encoding="cp932", low_memory=False)
+
+
+def read_table_bytes(content: bytes, file_name: str) -> pd.DataFrame:
+    suffix = Path(file_name).suffix.casefold()
+    if suffix == ".parquet":
+        return pd.read_parquet(BytesIO(content))
+    if suffix == ".csv":
+        return read_csv_bytes(content)
+    raise ValueError("CSVまたはParquetファイルを指定してください。")
 
 
 def index_tracks(tracks: pd.DataFrame, genre_rows: pd.DataFrame) -> pd.DataFrame:
@@ -70,7 +81,7 @@ def prepare_catalog(raw: pd.DataFrame, source_label="CSV") -> Catalog:
     """genre_rowsは曲×ジャンル、tracksは曲IDごとに1行。元データは変更しない。"""
     missing = sorted(set(META) - set(raw.columns))
     if missing:
-        raise ValueError("CSVに必要な列がありません: " + ", ".join(missing))
+        raise ValueError("楽曲データに必要な列がありません: " + ", ".join(missing))
     df = raw.copy()
     if "track_genre" not in df:
         df["track_genre"] = pd.NA
@@ -145,7 +156,12 @@ def dataset_source() -> tuple[str, int | None]:
     if configured:
         path = Path(configured).expanduser().resolve()
         return str(path), path.stat().st_mtime_ns
-    for path in (REPOSITORY_ROOT / "data/dataset.csv", REPOSITORY_ROOT / "apps/data/dataset.csv"):
+    for path in (
+        REPOSITORY_ROOT / "data/dataset.parquet",
+        REPOSITORY_ROOT / "apps/data/dataset.parquet",
+        REPOSITORY_ROOT / "data/dataset.csv",
+        REPOSITORY_ROOT / "apps/data/dataset.csv",
+    ):
         if path.is_file():
             return str(path), path.stat().st_mtime_ns
     return DATASET_URL, None
@@ -157,50 +173,63 @@ def load_catalog(source: str, modified: int | None = None, supplement_stamp: int
     if source == DATASET_URL:
         with urlopen(source, timeout=45) as response:
             content = response.read()
+        raw = read_table_bytes(content, "dataset.parquet")
     else:
-        content = Path(source).read_bytes()
-    catalog = prepare_catalog(read_csv_bytes(content), source_label=source_label)
+        source_path = Path(source)
+        raw = read_table_bytes(source_path.read_bytes(), source_path.name)
+    catalog = prepare_catalog(raw, source_label=source_label)
     if supplement_stamp is not None:
-        catalog = add_tunebat_tracks(catalog, read_csv_bytes(TUNEBAT_CSV.read_bytes()))
+        supplement_path = TUNEBAT_PARQUET if TUNEBAT_PARQUET.is_file() else TUNEBAT_CSV
+        supplement = read_table_bytes(supplement_path.read_bytes(), supplement_path.name)
+        catalog = add_tunebat_tracks(catalog, supplement)
     return catalog
 
 
 @st.cache_data(show_spinner=False)
-def load_uploaded_catalog(content: bytes) -> Catalog:
-    return prepare_catalog(read_csv_bytes(content))
+def load_uploaded_catalog(content: bytes, file_name: str = "upload.csv") -> Catalog:
+    return prepare_catalog(read_table_bytes(content, file_name))
 
 
 def catalog_for_page() -> Catalog:
-    """各ページで同じデータを取得。公開CSVか手元のCSVを使える。"""
+    """各ページで同じデータを取得。公開データか手元のCSV・Parquetを使える。"""
+    if "catalog_upload_bytes" not in st.session_state and "catalog_csv_bytes" in st.session_state:
+        st.session_state["catalog_upload_bytes"] = st.session_state.pop("catalog_csv_bytes")
+        st.session_state["catalog_upload_name"] = "upload.csv"
     with st.sidebar.expander("データの設定"):
         upload_version = st.session_state.get("catalog_upload_version", 0)
-        uploaded = st.file_uploader("別の楽曲CSVを使う", type=["csv"], key=f"_catalog_upload_{upload_version}")
+        uploaded = st.file_uploader("別の楽曲ファイルを使う", type=["csv", "parquet"], key=f"_catalog_upload_{upload_version}")
         if uploaded is not None:
-            st.session_state["catalog_csv_bytes"] = uploaded.getvalue()
-        if st.session_state.get("catalog_csv_bytes") is not None:
-            st.caption("アップロードしたCSVを使用中")
+            st.session_state["catalog_upload_bytes"] = uploaded.getvalue()
+            st.session_state["catalog_upload_name"] = uploaded.name
+        if st.session_state.get("catalog_upload_bytes") is not None:
+            st.caption("アップロードしたデータを使用中")
             if st.button("標準データに戻す", key="_catalog_reset"):
-                st.session_state.pop("catalog_csv_bytes", None)
+                st.session_state.pop("catalog_upload_bytes", None)
+                st.session_state.pop("catalog_upload_name", None)
                 st.session_state["catalog_upload_version"] = upload_version + 1
                 st.rerun()
         elif os.environ.get("SPOTIFY_DATASET_PATH"):
-            st.caption("環境変数で指定したCSVを使用中")
+            st.caption("環境変数で指定したデータを使用中")
         else:
             st.caption("標準データ：Spotify Tracks Dataset ＋ Tunebat追加曲")
     try:
         with st.spinner("楽曲データを読み込んでいます…"):
-            if st.session_state.get("catalog_csv_bytes") is not None:
-                catalog = load_uploaded_catalog(st.session_state["catalog_csv_bytes"])
+            if st.session_state.get("catalog_upload_bytes") is not None:
+                catalog = load_uploaded_catalog(
+                    st.session_state["catalog_upload_bytes"],
+                    st.session_state.get("catalog_upload_name", "upload.csv"),
+                )
             else:
-                stamp = TUNEBAT_CSV.stat().st_mtime_ns if TUNEBAT_CSV.is_file() and not os.environ.get("SPOTIFY_DATASET_PATH") else None
-                source_label = "指定したCSV" if os.environ.get("SPOTIFY_DATASET_PATH") else "Spotify Tracks Dataset"
+                supplement_path = TUNEBAT_PARQUET if TUNEBAT_PARQUET.is_file() else TUNEBAT_CSV
+                stamp = supplement_path.stat().st_mtime_ns if supplement_path.is_file() and not os.environ.get("SPOTIFY_DATASET_PATH") else None
+                source_label = "指定したデータ" if os.environ.get("SPOTIFY_DATASET_PATH") else "Spotify Tracks Dataset"
                 catalog = load_catalog(*dataset_source(), supplement_stamp=stamp, source_label=source_label)
-    except (OSError, ValueError, UnicodeError, pd.errors.ParserError) as exc:
-        st.error("楽曲データを読み込めませんでした。ネットワーク接続を確認するか、左の「データの設定」からCSVを選んでください。")
+    except (OSError, ValueError, UnicodeError, pd.errors.ParserError, pa.ArrowException) as exc:
+        st.error("楽曲データを読み込めませんでした。ネットワーク接続を確認するか、左の「データの設定」からCSVまたはParquetを選んでください。")
         with st.expander("エラーの詳細"):
             st.code(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", language=None)
         st.stop()
     if catalog.tracks.empty:
-        st.warning("利用できる楽曲が0件です。CSVの内容を確認してください。")
+        st.warning("利用できる楽曲が0件です。データの内容を確認してください。")
         st.stop()
     return catalog

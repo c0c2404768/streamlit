@@ -15,15 +15,16 @@ python -m streamlit run apps/main.py
 
 ## データ
 
-初回は [Spotify Tracks Dataset](https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset) の公開CSVを取得します。取得済みのデータはStreamlitでキャッシュします。GoogleログインやAPIキーは不要です。配布元のライセンス表記はBSDです。データの権利・ライセンスは配布元の案内に従ってください。
+初回は [Spotify Tracks Dataset](https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset) のParquet版を取得します。CSVより小さく、読込時間を短縮できます。取得済みのデータはStreamlitでキャッシュします。GoogleログインやAPIキーは不要です。配布元のライセンス表記はBSDです。データの権利・ライセンスは配布元の案内に従ってください。
 
-手元のCSVを使う場合は、次のいずれかを選べます。
+手元のデータを使う場合は、CSVとParquetのどちらにも対応しています。リポジトリ直下の `data/dataset.parquet` を優先し、なければCSVを使います。
 
-- リポジトリ直下の `data/dataset.csv` に置く（Git管理からは除外）。
-- 左の「データの設定」からCSVを選ぶ。アップロードしたCSVはページを移動しても利用できます。「標準データに戻す」で解除します。
-- 環境変数 `SPOTIFY_DATASET_PATH` にCSVの絶対パスを設定する。
+- CSVをParquetに変換するには、`python -c "import pandas as pd; pd.read_csv('data/dataset.csv').to_parquet('data/dataset.parquet', index=False)"` を実行します。Parquetの読み書きには `pyarrow` を使います。
+- リポジトリ直下の `data/dataset.parquet` または `data/dataset.csv` に置きます（Git管理からは除外）。
+- 左の「データの設定」からCSVまたはParquetを選べます。アップロードしたデータはページを移動しても利用でき、「標準データに戻す」で解除します。
+- 環境変数 `SPOTIFY_DATASET_PATH` にCSVまたはParquetの絶対パスを設定できます。
 
-読込エラー時は案内を表示します。指定したローカルCSVが見つからない場合に、別のデータへ自動で切り替えることはありません。
+読込エラー時は案内を表示します。指定したローカルデータが見つからない場合に、別のデータへ自動で切り替えることはありません。
 
 必要な列は `track_id`, `track_name`, `artists` です。`track_genre` が空欄・未収録の曲も検索できますが、ジャンル別の集計には含めません。推薦用の4特徴（`tempo`, `energy`, `valence`, `danceability`）がある場合は欠損・不正値を除外します。ジャンル比較の追加4項目は `acousticness`, `instrumentalness`, `speechiness`, `duration_ms`（分に変換）です。追加項目がないCSVでも、利用できる特徴で表示します。
 
@@ -32,6 +33,8 @@ python -m streamlit run apps/main.py
 ### Tunebatの追加1万曲
 
 標準データには `apps/music_app/assets/tunebat_tracks.csv` の10,000曲を追加します。元ファイルは `tunebat_データセット外_10000曲.xlsx`（`tracks` シート）です。1,000曲版は使いません。取得日・出典・元ExcelのSHA-256・特徴ごとの件数を `tunebat_source.json` に記録しています。元Excelは変更しません。
+
+アプリの読み込みには同じ内容の `tunebat_tracks.parquet` を優先して使い、CSVは元データとして残しています。
 
 - 標準データとの同一Spotify IDは0件で、合計99,583曲。ジャンル集計は元の113,392行・114ジャンルを維持します。
 - 表記の正規化後に曲名・アーティストが一致する追加曲は2曲ありますが、Spotify IDは異なります。別IDを曲名だけで統合せず、音源の違いを確認できる形で保持します。
