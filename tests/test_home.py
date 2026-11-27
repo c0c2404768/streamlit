@@ -33,7 +33,15 @@ class HomePageTests(unittest.TestCase):
         app = self.app().run()
         self.assertFalse(app.exception)
         self.assertTrue(any("まだ曲が選ばれていません" in x.value for x in app.info))
-        self.assertEqual(app.metric[0].value, "59")
+        self.assertEqual(next(m for m in app.metric if m.label == "曲の数").value, "59")
+        self.assertTrue(any("なぜ人気度を使わないのか" in x.value for x in app.subheader))
+        self.assertEqual([m.label for m in app.metric][:3], ["音の特徴4つ", "音の特徴14項目", "ジャンル"])
+
+    def test_search_button_opens_search_page(self):
+        app = self.app().run()
+        app.button(key="_home_search").click().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("曲の検索・選択" in x.value for x in app.title))
 
     def test_selected_song_is_shown(self):
         app = self.app()
