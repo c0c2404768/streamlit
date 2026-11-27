@@ -117,7 +117,7 @@ def radar_spec(points: pd.DataFrame, names: list[str], features=FEATURES) -> dic
         # 左右の文字は外側に向けて寄せ、上下は中央ぞろえにして、文字が図の外にはみ出さないようにする
         align = "center" if abs(c) < 0.2 else ("left" if c > 0 else "right")
         labels.append({"x": 1.1 * c, "y": 1.1 * np.sin(a), "label": LABELS[f], "align": align})
-    axis = {"axis": None, "scale": {"domain": [-1.75, 1.75], "nice": False}}
+    axis = {"axis": None, "scale": {"domain": [-1.6, 1.6], "nice": False}}
     xy = {"x": {"field": "x", "type": "quantitative", **axis},
           "y": {"field": "y", "type": "quantitative", **axis}}
     label_layer = lambda align: {
@@ -195,6 +195,7 @@ def render_similar(catalog: Catalog):
                               "distance": "距離", "reason": "似ている理由"})
              .set_index("順位"))
     table[table.columns[4]] = table[table.columns[4]].map("{:.3f}".format)
+    table["人気度"] = table["人気度"].map(lambda v: "" if pd.isna(v) else f"{int(v)}")  # 23.0000 ではなく 23 と出す
     st.table(table)
 
     left, right = st.columns([3, 2])
