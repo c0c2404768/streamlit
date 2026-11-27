@@ -14,7 +14,6 @@ import streamlit as st
 
 from music_app.data import CORE_FEATURES, Catalog, LABELS
 from music_app.genre_names import genre_label
-from music_app.popularity import strength_summary
 from music_app.search import tracks_in_genre
 from music_app.selection import selected_track
 from music_app.similar import similarity_matrix
@@ -158,10 +157,6 @@ def render_compare(catalog: Catalog):
         st.html(radar_svg(tracks, song, SONG_COLOR))
         big_number("人気度", popularity_text(song.get("popularity")), SONG_COLOR, "4rem")
 
-    if not similar.empty and tracks.popularity.notna().sum() >= 3:
-        r = strength_summary(tracks, catalog.genre_rows)["core"]
+    if not similar.empty and similar.popularity.notna().sum() >= 2:
         spread = similar.popularity.max() - similar.popularity.min()
-        st.info(f"音がよく似た{len(similar)}曲でも、人気度には最大 {spread:.0f} の差があります。"
-                + ("" if np.isnan(r) else f"全曲で調べても、この4つの特徴から人気度はほとんど説明できません"
-                   f"（重相関係数 {r:.2f}、説明できる割合 {r ** 2 * 100:.0f}%）。")
-                + "だからこのアプリは、人気度ではなく音の特徴で曲を探しています。")
+        st.info(f"音がよく似た{len(similar)}曲でも、人気度には最大 {spread:.0f} の差があります。")
