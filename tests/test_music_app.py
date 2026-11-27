@@ -224,14 +224,10 @@ class PageTests(unittest.TestCase):
     def test_group_page_uses_selected_song_and_limits_search_results(self):
         raw = fixture()
         extras = []
-        for i in range(60):
-            row = raw.iloc[i % len(raw)].copy()
+        for i in range(550):
+            row = raw.iloc[0].copy()
             row["track_id"] = f"group-{i:03d}"
             row["track_name"] = f"Group track {i:03d}"
-            row["tempo"] = 60 + i
-            row["energy"] = (i % 10) / 10
-            row["valence"] = ((i * 3) % 10) / 10
-            row["danceability"] = ((i * 7) % 10) / 10
             extras.append(row)
         pd.concat([raw, pd.DataFrame(extras)], ignore_index=True).to_csv(self.path, index=False)
 
@@ -246,7 +242,7 @@ class PageTests(unittest.TestCase):
         self.assertTrue(any("選択中の曲: Comedy / Gen Hoshino" in item.value for item in app.text))
         self.assertEqual(app.text_input(key="_group_keyword").value, "Comedy / Gen Hoshino")
         similarities = app.dataframe[0].value
-        self.assertGreater(len(similarities), 0)
+        self.assertEqual(len(similarities), 500)
         self.assertNotIn("Comedy", similarities["曲名"].tolist())
         self.assertIn("特徴距離", similarities.columns)
         self.assertEqual(similarities["特徴距離"].tolist(), sorted(similarities["特徴距離"].tolist()))
@@ -255,7 +251,7 @@ class PageTests(unittest.TestCase):
         self.assertEqual(app.selectbox(key="_group_mood_filter").value, selected_mood_caption)
         app.selectbox(key="_group_mood_filter").set_value("すべて表示").run()
         app.text_input(key="_group_keyword").set_value("").run()
-        self.assertEqual(len(app.dataframe[0].value), 100)
+        self.assertEqual(len(app.dataframe[0].value), 500)
 
         app.text_input(key="_group_keyword").set_value("Comedy").run()
         self.assertEqual(len(app.dataframe[0].value), 2)

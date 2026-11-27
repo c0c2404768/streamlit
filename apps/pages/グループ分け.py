@@ -178,7 +178,7 @@ filtered_df = filtered_df[
     (filtered_df["tempo"] >= bpm_range[0]) &
     (filtered_df["tempo"] <= bpm_range[1])
 ]
-SEARCH_RESULT_LIMIT = 100
+SEARCH_RESULT_LIMIT = 500
 search_results = filtered_df.head(SEARCH_RESULT_LIMIT)
 
 st.divider()
@@ -186,72 +186,71 @@ st.divider()
 # ---------------------------------------------------------
 # 5. 楽曲ムードマップ（散布図）と検索結果の表示
 # ---------------------------------------------------------
-col_chart, col_list = st.columns([1.2, 1])
-
-with col_chart:
-    st.subheader("📊 楽曲ムードマップ（Valence × Energy）")
-    color_map = {
-        "☀️ ポップ・ハッピー系（明るい・気分が上がる）": "#FFD166",
-        "🌙 バラード・チル系（静か・落ち着き）": "#4EA8DE",
-        "🔥 ロック・エナジー系（激しい・スピード感）": "#EF476F",
+st.subheader("📊 楽曲ムードマップ（Valence × Energy）")
+color_map = {
+    "☀️ ポップ・ハッピー系（明るい・気分が上がる）": "#FFD166",
+    "🌙 バラード・チル系（静か・落ち着き）": "#4EA8DE",
+    "🔥 ロック・エナジー系（激しい・スピード感）": "#EF476F",
+}
+MAP_LIMIT = 5000  # 点が多すぎると表示が重くなるため、地図に出す曲数の上限
+if exact_selected_track:
+    map_df = search_results
+else:
+    map_df = filtered_df.sample(n=MAP_LIMIT, random_state=0) if len(filtered_df) > MAP_LIMIT else filtered_df
+fig = px.scatter(
+    map_df,
+    x="valence",
+    y="energy",
+    color="ムード（グループ）",
+    color_discrete_map=color_map,
+    hover_data=[TRACK_COL, ARTIST_COL, "tempo"],
+    labels={
+        "valence": "Valence（明るさ）",
+        "energy": "Energy（激しさ）",
+        "ムード（グループ）": "グループ"
     }
-    MAP_LIMIT = 5000  # 点が多すぎると表示が重くなるため、地図に出す曲数の上限
-    if exact_selected_track:
-        map_df = search_results
-    else:
-        map_df = filtered_df.sample(n=MAP_LIMIT, random_state=0) if len(filtered_df) > MAP_LIMIT else filtered_df
-    fig = px.scatter(
-        map_df,
-        x="valence",
-        y="energy",
-        color="ムード（グループ）",
-        color_discrete_map=color_map,
-        hover_data=[TRACK_COL, ARTIST_COL, "tempo"],
-        labels={
-            "valence": "Valence（明るさ）",
-            "energy": "Energy（激しさ）",
-            "ムード（グループ）": "グループ"
-        }
+)
+fig.update_layout(
+    height=720,
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+)
+if selected_song is not None:
+    fig.add_scatter(
+        x=[selected_song["valence"]],
+        y=[selected_song["energy"]],
+        mode="markers",
+        marker={"size": 17, "symbol": "star", "color": "#111827", "line": {"width": 2, "color": "white"}},
+        name="選択中の曲",
+        text=[f"{selected_song['track_name']} / {selected_song['artists']}"],
+        hovertemplate="%{text}<br>Valence=%{x}<br>Energy=%{y}<extra></extra>",
     )
-    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
-    if selected_song is not None:
-        fig.add_scatter(
-            x=[selected_song["valence"]],
-            y=[selected_song["energy"]],
-            mode="markers",
-            marker={"size": 17, "symbol": "star", "color": "#111827", "line": {"width": 2, "color": "white"}},
-            name="選択中の曲",
-            text=[f"{selected_song['track_name']} / {selected_song['artists']}"],
-            hovertemplate="%{text}<br>Valence=%{x}<br>Energy=%{y}<extra></extra>",
-        )
-    st.plotly_chart(fig, width="stretch")
-    if exact_selected_track:
-        st.caption("選択曲との4つの音響特徴量を標準化し、距離が近い上位100曲をマップにも表示しています。基準曲と同じ曲名・アーティストの曲は除外しています。")
-    elif len(filtered_df) > MAP_LIMIT:
-        st.caption(f"該当する{len(filtered_df):,}曲のうち、{MAP_LIMIT:,}曲をランダムに選んで表示しています。")
-    if selected_song is not None:
-        st.caption("★は「曲の検索・選択」で選んだ曲です。")
+st.plotly_chart(fig, width="stretch")
+if exact_selected_track:
+    st.caption(f"選択曲との4つの音響特徴量を標準化し、距離が近い上位{SEARCH_RESULT_LIMIT}曲をマップにも表示しています。基準曲と同じ曲名・アーティストの曲は除外しています。")
+elif len(filtered_df) > MAP_LIMIT:
+    st.caption(f"該当する{len(filtered_df):,}曲のうち、{MAP_LIMIT:,}曲をランダムに選んで表示しています。")
+if selected_song is not None:
+    st.caption("★は「曲の検索・選択」で選んだ曲です。")
 
-with col_list:
-    result_title = "選択曲に値が近い楽曲" if exact_selected_track else "検索結果"
-    st.subheader(f"🎶 {result_title}（該当: {len(filtered_df):,}曲）")
-    if selected_song is not None:
-        st.text(f"選択中の曲: {selected_song['track_name']} / {selected_song['artists']}")
-        st.caption(f"ムード: {selected_song['ムード（グループ）']}")
-    else:
-        st.page_link("pages/曲の検索・選択.py", label="曲を検索・選択してムードマップに表示", icon="🔍")
-    display_df = search_results[[TRACK_COL, ARTIST_COL, "ムード（グループ）", "tempo"]].rename(columns={
-        TRACK_COL: "曲名",
-        ARTIST_COL: "アーティスト",
-        "tempo": "BPM"
-    })
-    if exact_selected_track:
-        display_df["特徴距離"] = search_results["distance"].round(3).to_numpy()
-    st.dataframe(display_df, width="stretch", hide_index=True)
-    if exact_selected_track and len(filtered_df) > SEARCH_RESULT_LIMIT:
-        st.caption(f"値が近い順に上位{SEARCH_RESULT_LIMIT}曲を表示しています。")
-    elif len(filtered_df) > SEARCH_RESULT_LIMIT:
-        st.caption(f"検索結果一覧は先頭{SEARCH_RESULT_LIMIT}曲まで表示しています。条件を追加すると絞り込めます。")
+result_title = "選択曲に値が近い楽曲" if exact_selected_track else "検索結果"
+st.subheader(f"🎶 {result_title}（該当: {len(filtered_df):,}曲）")
+if selected_song is not None:
+    st.text(f"選択中の曲: {selected_song['track_name']} / {selected_song['artists']}")
+    st.caption(f"ムード: {selected_song['ムード（グループ）']}")
+else:
+    st.page_link("pages/曲の検索・選択.py", label="曲を検索・選択してムードマップに表示", icon="🔍")
+display_df = search_results[[TRACK_COL, ARTIST_COL, "ムード（グループ）", "tempo"]].rename(columns={
+    TRACK_COL: "曲名",
+    ARTIST_COL: "アーティスト",
+    "tempo": "BPM"
+})
+if exact_selected_track:
+    display_df["特徴距離"] = search_results["distance"].round(3).to_numpy()
+st.dataframe(display_df, width="stretch", hide_index=True)
+if exact_selected_track and len(filtered_df) > SEARCH_RESULT_LIMIT:
+    st.caption(f"値が近い順に上位{SEARCH_RESULT_LIMIT}曲を表示しています。")
+elif len(filtered_df) > SEARCH_RESULT_LIMIT:
+    st.caption(f"検索結果一覧は先頭{SEARCH_RESULT_LIMIT}曲まで表示しています。条件を追加すると絞り込めます。")
 
 st.divider()
 
