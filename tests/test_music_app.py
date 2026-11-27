@@ -275,11 +275,21 @@ class PageTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["selected_track_id"], COMEDY)
         self.assertTrue(any("選択中の曲: Comedy / Gen Hoshino" in item.value for item in app.text))
+        self.assertEqual(app.text_input(key="_group_keyword").value, "Comedy / Gen Hoshino")
+        similarities = app.dataframe[0].value
+        self.assertGreater(len(similarities), 0)
+        self.assertNotIn("Comedy", similarities["曲名"].tolist())
+        self.assertIn("特徴距離", similarities.columns)
+        self.assertEqual(similarities["特徴距離"].tolist(), sorted(similarities["特徴距離"].tolist()))
         selected_mood_caption = next(item.value.split(":", 1)[1].strip()
                                      for item in app.caption if item.value.startswith("ムード:"))
         self.assertEqual(app.selectbox(key="_group_mood_filter").value, selected_mood_caption)
         app.selectbox(key="_group_mood_filter").set_value("すべて表示").run()
+        app.text_input(key="_group_keyword").set_value("").run()
         self.assertEqual(len(app.dataframe[0].value), 100)
+
+        app.text_input(key="_group_keyword").set_value("Comedy").run()
+        self.assertEqual(len(app.dataframe[0].value), 2)
 
         app.switch_page("pages/曲の検索・選択.py").run()
         app.text_input(key="_search_query").set_value("Ghost").run()
@@ -289,7 +299,13 @@ class PageTests(unittest.TestCase):
         selected_mood_caption = next(item.value.split(":", 1)[1].strip()
                                      for item in app.caption if item.value.startswith("ムード:"))
         self.assertEqual(app.session_state["selected_track_id"], GHOST)
+        self.assertEqual(app.text_input(key="_group_keyword").value, "Ghost - Acoustic / Ben Woodward")
         self.assertEqual(app.selectbox(key="_group_mood_filter").value, selected_mood_caption)
+        self.assertIn("特徴距離", app.dataframe[0].value.columns)
+        app.button(key="_group_clear_selected_song").click().run()
+        self.assertNotIn("selected_track_id", app.session_state)
+        self.assertEqual(app.text_input(key="_group_keyword").value, "")
+        self.assertEqual(app.selectbox(key="_group_mood_filter").value, "すべて表示")
 
     def test_unknown_genre_song_can_be_compared_without_invented_values(self):
         raw = fixture()

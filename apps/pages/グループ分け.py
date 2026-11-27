@@ -4,13 +4,23 @@ import plotly.express as px
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from music_app.data import catalog_for_page
-from music_app.selection import selected_track
+from music_app.similar import find_similar, standardized_matrix
+from music_app.selection import clear_selection, selected_track
 
 st.set_page_config(
     page_title="グループ分け - 楽曲ムード分析",
     page_icon="🎵",
     layout="wide"
 )
+
+
+def clear_group_selection():
+    clear_selection()
+    st.session_state["_group_filter_source_track_id"] = None
+    st.session_state["_group_seed_keyword"] = ""
+    st.session_state["_group_keyword"] = ""
+    st.session_state["_group_mood_filter"] = "すべて表示"
+
 
 # ---------------------------------------------------------
 # 1. 共通関数でデータ取得 ＋ KMeans法による3グループ自動分類
@@ -49,6 +59,18 @@ def get_clustered_catalog(tracks: pd.DataFrame):
     df["ムード（グループ）"] = df["cluster"].map(label_map)
     return df, track_col, artist_col
 
+
+@st.cache_data(show_spinner="近い楽曲を検索しています…")
+def get_similar_tracks(tracks: pd.DataFrame, track_id: str) -> pd.DataFrame:
+    return find_similar(
+        tracks,
+        standardized_matrix(tracks),
+        track_id,
+        top_n=len(tracks),
+        method="euc",
+    )
+
+
 df, TRACK_COL, ARTIST_COL = get_clustered_catalog(catalog_for_page().tracks)
 selected_song = selected_track(df)
 
@@ -70,21 +92,42 @@ with st.container(border=True):
         "🌙 バラード・チル系（静か・落ち着き）",
         "🔥 ロック・エナジー系（激しい・スピード感）"
     ]
+    keyword_key = "_group_keyword"
+    seed_keyword_key = "_group_seed_keyword"
     mood_filter_key = "_group_mood_filter"
-    selected_track_id = selected_song["track_id"] if selected_song is not None else None
-    if st.session_state.get("_group_mood_source_track_id") != selected_track_id:
-        st.session_state["_group_mood_source_track_id"] = selected_track_id
+    source_track_key = "_group_filter_source_track_id"
+    selected_track_id = str(selected_song["track_id"]) if selected_song is not None else None
+    if source_track_key not in st.session_state or st.session_state[source_track_key] != selected_track_id:
+        seed_keyword = (
+            f"{selected_song['track_name']} / {selected_song['artists']}"
+            if selected_song is not None else ""
+        )
+        st.session_state[source_track_key] = selected_track_id
+        st.session_state[seed_keyword_key] = seed_keyword
+        st.session_state[keyword_key] = seed_keyword
         st.session_state[mood_filter_key] = (
             selected_song["ムード（グループ）"] if selected_song is not None else mood_options[0]
         )
-    elif st.session_state.get(mood_filter_key) not in mood_options:
-        st.session_state[mood_filter_key] = mood_options[0]
+    else:
+        st.session_state.setdefault(keyword_key, "")
+        st.session_state.setdefault(seed_keyword_key, "")
+        if st.session_state.get(mood_filter_key) not in mood_options:
+            st.session_state[mood_filter_key] = mood_options[0]
 
     with col1:
         keyword = st.text_input(
             "キーワード検索（曲名・アーティスト名）",
-            placeholder="例: Lemon / Kenshi Yonezu"
+            placeholder="例: Lemon / Kenshi Yonezu",
+            key=keyword_key
         )
+        exact_selected_track = (
+            selected_track_id is not None
+            and keyword == st.session_state[seed_keyword_key]
+        )
+        if exact_selected_track:
+            st.caption("選択曲のIDで厳密に絞り込み中です。キーワードを編集すると通常検索になります。")
+        elif selected_song is not None:
+            st.caption("選択曲を変更すると、キーワードとムードの初期値が更新されます。")
 
     with col2:
         selected_mood = st.selectbox(
@@ -107,16 +150,26 @@ with st.container(border=True):
             value=(min_bpm, max_bpm)
         )
 
+    if selected_song is not None:
+        st.button(
+            "選択曲をクリア",
+            key="_group_clear_selected_song",
+            help="共有している選択曲を解除し、キーワードとムードを初期状態に戻します。",
+            on_click=clear_group_selection,
+        )
+
 # ---------------------------------------------------------
 # 4. 絞り込み処理（フィルタリング）
 # ---------------------------------------------------------
-filtered_df = df.copy()
-
-if keyword:
-    filtered_df = filtered_df[
-        filtered_df[TRACK_COL].astype(str).str.contains(keyword, case=False, na=False) |
-        filtered_df[ARTIST_COL].astype(str).str.contains(keyword, case=False, na=False)
-    ]
+if exact_selected_track:
+    filtered_df = get_similar_tracks(df, selected_track_id)
+else:
+    filtered_df = df.copy()
+    if keyword:
+        filtered_df = filtered_df[
+            filtered_df[TRACK_COL].astype(str).str.contains(keyword, case=False, na=False, regex=False) |
+            filtered_df[ARTIST_COL].astype(str).str.contains(keyword, case=False, na=False, regex=False)
+        ]
 
 if selected_mood != "すべて表示":
     filtered_df = filtered_df[filtered_df["ムード（グループ）"] == selected_mood]
@@ -143,7 +196,10 @@ with col_chart:
         "🔥 ロック・エナジー系（激しい・スピード感）": "#EF476F",
     }
     MAP_LIMIT = 5000  # 点が多すぎると表示が重くなるため、地図に出す曲数の上限
-    map_df = filtered_df.sample(n=MAP_LIMIT, random_state=0) if len(filtered_df) > MAP_LIMIT else filtered_df
+    if exact_selected_track:
+        map_df = search_results
+    else:
+        map_df = filtered_df.sample(n=MAP_LIMIT, random_state=0) if len(filtered_df) > MAP_LIMIT else filtered_df
     fig = px.scatter(
         map_df,
         x="valence",
@@ -169,13 +225,16 @@ with col_chart:
             hovertemplate="%{text}<br>Valence=%{x}<br>Energy=%{y}<extra></extra>",
         )
     st.plotly_chart(fig, width="stretch")
-    if len(filtered_df) > MAP_LIMIT:
+    if exact_selected_track:
+        st.caption("選択曲との4つの音響特徴量を標準化し、距離が近い上位100曲をマップにも表示しています。基準曲と同じ曲名・アーティストの曲は除外しています。")
+    elif len(filtered_df) > MAP_LIMIT:
         st.caption(f"該当する{len(filtered_df):,}曲のうち、{MAP_LIMIT:,}曲をランダムに選んで表示しています。")
     if selected_song is not None:
         st.caption("★は「曲の検索・選択」で選んだ曲です。")
 
 with col_list:
-    st.subheader(f"🎶 検索結果（該当: {len(filtered_df):,}曲）")
+    result_title = "選択曲に値が近い楽曲" if exact_selected_track else "検索結果"
+    st.subheader(f"🎶 {result_title}（該当: {len(filtered_df):,}曲）")
     if selected_song is not None:
         st.text(f"選択中の曲: {selected_song['track_name']} / {selected_song['artists']}")
         st.caption(f"ムード: {selected_song['ムード（グループ）']}")
@@ -186,8 +245,12 @@ with col_list:
         ARTIST_COL: "アーティスト",
         "tempo": "BPM"
     })
+    if exact_selected_track:
+        display_df["特徴距離"] = search_results["distance"].round(3).to_numpy()
     st.dataframe(display_df, width="stretch", hide_index=True)
-    if len(filtered_df) > SEARCH_RESULT_LIMIT:
+    if exact_selected_track and len(filtered_df) > SEARCH_RESULT_LIMIT:
+        st.caption(f"値が近い順に上位{SEARCH_RESULT_LIMIT}曲を表示しています。")
+    elif len(filtered_df) > SEARCH_RESULT_LIMIT:
         st.caption(f"検索結果一覧は先頭{SEARCH_RESULT_LIMIT}曲まで表示しています。条件を追加すると絞り込めます。")
 
 st.divider()
