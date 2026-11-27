@@ -1,4 +1,4 @@
-"""小林担当：似ている曲の人気度くらべ。
+"""小林担当：似ている曲との人気度比較。
 
 選んだ曲と音が似ている3曲を、レーダーチャートと人気度で並べる。
 「人気度との関係」の分析（音の特徴から人気度はほとんど説明できない）を、選んだ曲で確かめるためのページ。
@@ -23,6 +23,7 @@ RADAR = CORE_FEATURES
 ALL_GENRES = "__all__"
 SHOW = 3
 SONG_COLOR, SIMILAR_COLOR = "#C55A11", "#2E8B6A"
+SHORT_LABELS = {"danceability": "ノリ"}  # 小さい図では横幅が足りないので短くする
 
 
 def find_similar_in(catalog: Catalog, track_id: str, genre: str | None = None, n: int = SHOW) -> pd.DataFrame:
@@ -49,12 +50,13 @@ def radar_values(tracks: pd.DataFrame, song) -> list[float]:
     return [min(max(float(song[f]) / (tempo_max if f == "tempo" else 1.0), 0.0), 1.0) for f in RADAR]
 
 
-def radar_svg(tracks: pd.DataFrame, song, color: str, base=None, max_width: int = 320, labels: bool = True) -> str:
+def radar_svg(tracks: pd.DataFrame, song, color: str, base=None, max_width: int = 320, small: bool = False) -> str:
     """1曲分のレーダーチャートをSVGで作る。viewBox で縦横比を保ったまま枠の幅に合わせて縮むので、
     サイドバーを開いて列が狭くなっても図がはみ出さない。base を渡すと選んだ曲の形を灰色の点線で重ねる。"""
-    # 小さい図は項目名を出さず（右の大きい図と同じ並び）、図形を大きく見せる
-    width, height = (300, 200) if labels else (200, 200)
-    cx, cy, radius = width / 2, height / 2, 62 if labels else 88
+    # 小さい図は枠が狭いので、図形を大きめ・文字を相対的に大きくして、縮んでも項目名が読めるようにする
+    # 小さい図は左の「ノリ」より右の「力強さ」が長いので、中心を少し左に寄せて余白を減らす
+    width, height, radius, font, cx = (290, 206, 80, 17, 142) if small else (300, 200, 62, 14, 150)
+    cy = height / 2
     angles = np.pi / 2 - 2 * np.pi * np.arange(len(RADAR)) / len(RADAR)
 
     def point(value, angle):
@@ -67,12 +69,12 @@ def radar_svg(tracks: pd.DataFrame, song, color: str, base=None, max_width: int 
              for r in (0.5, 1.0)]
     parts += [f'<line x1="{cx}" y1="{cy}" x2="{x:.1f}" y2="{y:.1f}" stroke="#E6E6E6" stroke-width="1"/>'
               for x, y in (point(1.0, a) for a in angles)]
-    for feature, angle in zip(RADAR, angles if labels else []):
+    for feature, angle in zip(RADAR, angles):
         x, y = point(1.16, angle)
         c = np.cos(angle)
         anchor = "middle" if abs(c) < 0.2 else ("start" if c > 0 else "end")
         parts.append(f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{anchor}" dominant-baseline="middle" '
-                     f'font-size="14" fill="#555">{escape(LABELS[feature])}</text>')
+                     f'font-size="{font}" fill="#555">{escape(SHORT_LABELS.get(feature, LABELS[feature]) if small else LABELS[feature])}</text>')
     if base is not None:
         parts.append(f'<polygon points="{polygon(radar_values(tracks, base))}" fill="none" stroke="#9A9A9A" '
                      f'stroke-width="1.5" stroke-dasharray="4 3"/>')
@@ -101,13 +103,21 @@ def big_number(label: str, value: str, color: str, size: str = "3.2rem", note: s
             f'<div style="font-size:{size};font-weight:700;color:{color}">{escape(value)}</div>{note_html}</div>')
 
 
-def song_header(song):
-    st.markdown(f"**{escape(str(song['track_name']))}**")
-    st.caption(f"{song['artists']}　／　{song['genres']}")
+def song_header(song, fixed: bool = False):
+    """曲名とアーティスト・ジャンル。fixed=True のときは高さをそろえ（長い名前は「…」で省略）、3つのカードの下端をそろえる。"""
+    if not fixed:
+        st.markdown(f"**{escape(str(song['track_name']))}**")
+        st.caption(f"{song['artists']}　／　{song['genres']}")
+        return
+    clamp = "display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;"
+    st.html(f'<div style="height:6.4em;line-height:1.45" title="{escape(str(song["track_name"]))} / {escape(str(song["artists"]))}">'
+            f'<div style="{clamp}-webkit-line-clamp:2;font-weight:700">{escape(str(song["track_name"]))}</div>'
+            f'<div style="{clamp}-webkit-line-clamp:2;font-size:.85rem;color:#777;margin-top:.2em">'
+            f'{escape(str(song["artists"]))}　／　{escape(str(song["genres"]))}</div></div>')
 
 
 def render_compare(catalog: Catalog):
-    st.title("似ている曲の人気度")
+    st.title("似ている曲との人気度比較")
     st.caption("音が似ている曲どうしでも、人気度は大きく違うことがあります。選んだ曲と、音が近い3曲の人気度を比べます。")
     tracks = catalog.tracks
     song = selected_track(tracks)
@@ -129,8 +139,8 @@ def render_compare(catalog: Catalog):
         else:
             for column, (_, row) in zip(st.columns(SHOW), similar.iterrows()):
                 with column, st.container(border=True):
-                    song_header(row)
-                    st.html(radar_svg(tracks, row, SIMILAR_COLOR, base=song, max_width=160, labels=False))
+                    song_header(row, fixed=True)
+                    st.html(radar_svg(tracks, row, SIMILAR_COLOR, base=song, max_width=240, small=True))
                     big_number("人気度", popularity_text(row.popularity), SIMILAR_COLOR, "2rem",
                                f"類似度 {row.similarity:.2f}")
             average = similar.popularity.mean()
@@ -140,8 +150,7 @@ def render_compare(catalog: Catalog):
             where = "すべてのジャンル" if genre == ALL_GENRES else genre_label(genre)
             big_number(f"似ている{len(similar)}曲の平均人気度：{where}",
                        "—" if pd.isna(average) else f"{average:.0f}", SIMILAR_COLOR, "4rem", gap)
-            st.caption("小さい図の項目の並びは右の図と同じです（上：テンポ、右：力強さ、下：明るさ、左：ノリの良さ）。"
-                       "灰色の点線は選んだ曲の形で、重なるほど音が似ています。")
+            st.caption("灰色の点線は選んだ曲の形です。形が重なるほど音が似ています。")
 
     with right, st.container(border=True):
         st.markdown("##### あなたが選んだ曲")
@@ -156,4 +165,3 @@ def render_compare(catalog: Catalog):
                 + ("" if np.isnan(r) else f"全曲で調べても、この4つの特徴から人気度はほとんど説明できません"
                    f"（重相関係数 {r:.2f}、説明できる割合 {r ** 2 * 100:.0f}%）。")
                 + "だからこのアプリは、人気度ではなく音の特徴で曲を探しています。")
-        st.page_link("pages/人気度との関係.py", label="分析の詳細を見る（人気度との関係）", icon="📈")
