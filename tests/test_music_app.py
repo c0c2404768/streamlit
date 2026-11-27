@@ -221,6 +221,31 @@ class PageTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertNotIn("selected_track_id", app.session_state)
 
+    def test_group_page_uses_selected_song_and_limits_search_results(self):
+        raw = fixture()
+        extras = []
+        for i in range(60):
+            row = raw.iloc[i % len(raw)].copy()
+            row["track_id"] = f"group-{i:03d}"
+            row["track_name"] = f"Group track {i:03d}"
+            row["tempo"] = 60 + i
+            row["energy"] = (i % 10) / 10
+            row["valence"] = ((i * 3) % 10) / 10
+            row["danceability"] = ((i * 7) % 10) / 10
+            extras.append(row)
+        pd.concat([raw, pd.DataFrame(extras)], ignore_index=True).to_csv(self.path, index=False)
+
+        app = self.app()
+        app.text_input(key="_search_query").set_value("Comedy").run()
+        app.selectbox(key="_search_pick").set_value(COMEDY).run()
+        app.button(key="_search_confirm").click().run()
+        app.switch_page("pages/グループ分け.py").run()
+
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state["selected_track_id"], COMEDY)
+        self.assertTrue(any("選択中の曲: Comedy / Gen Hoshino" in item.value for item in app.text))
+        self.assertEqual(len(app.dataframe[0].value), 100)
+
     def test_unknown_genre_song_can_be_compared_without_invented_values(self):
         raw = fixture()
         extra = raw.iloc[:1].copy()
