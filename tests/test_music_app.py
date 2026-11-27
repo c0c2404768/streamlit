@@ -277,7 +277,7 @@ class PageTests(unittest.TestCase):
         self.assertTrue(any("選択中の曲: Comedy / Gen Hoshino" in item.value for item in app.text))
         self.assertEqual(app.text_input(key="_group_keyword").value, "Comedy / Gen Hoshino")
         similarities = app.dataframe[0].value
-        self.assertEqual(len(similarities), 500)
+        self.assertEqual(len(similarities), 100)
         self.assertNotIn("Comedy", similarities["曲名"].tolist())
         self.assertIn("特徴距離", similarities.columns)
         self.assertEqual(similarities["特徴距離"].tolist(), sorted(similarities["特徴距離"].tolist()))
@@ -286,7 +286,7 @@ class PageTests(unittest.TestCase):
         self.assertEqual(app.selectbox(key="_group_mood_filter").value, selected_mood_caption)
         app.selectbox(key="_group_mood_filter").set_value("すべて表示").run()
         app.text_input(key="_group_keyword").set_value("").run()
-        self.assertEqual(len(app.dataframe[0].value), 500)
+        self.assertEqual(len(app.dataframe[0].value), 100)
 
         app.text_input(key="_group_keyword").set_value("Comedy").run()
         self.assertEqual(len(app.dataframe[0].value), 2)

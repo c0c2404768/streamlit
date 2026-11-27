@@ -178,7 +178,7 @@ filtered_df = filtered_df[
     (filtered_df["tempo"] >= bpm_range[0]) &
     (filtered_df["tempo"] <= bpm_range[1])
 ]
-SEARCH_RESULT_LIMIT = 500
+SEARCH_RESULT_LIMIT = 100
 search_results = filtered_df.head(SEARCH_RESULT_LIMIT)
 
 st.divider()
