@@ -5,6 +5,7 @@
 レーダーチャートは、似ている曲の計算に使っている4つの特徴（テンポ・力強さ・明るさ・ノリの良さ）にそろえる。
 この4つは追加曲（Tunebat）も含めて全曲に値があり、残りの特徴は追加曲の98%で値がないため使わない。
 """
+import base64
 from html import escape
 
 import numpy as np
@@ -12,6 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from music_app.data import CORE_FEATURES, Catalog, LABELS
+from music_app.genre_names import genre_label
 from music_app.popularity import strength_summary
 from music_app.search import tracks_in_genre
 from music_app.selection import selected_track
@@ -47,44 +49,45 @@ def radar_values(tracks: pd.DataFrame, song) -> list[float]:
     return [min(max(float(song[f]) / (tempo_max if f == "tempo" else 1.0), 0.0), 1.0) for f in RADAR]
 
 
-def radar_chart(tracks: pd.DataFrame, song, color: str, height: int, base=None) -> dict:
-    """1曲分のレーダーチャート（vega-lite）。base を渡すと、選んだ曲の形を灰色の点線で重ねる。"""
+def radar_svg(tracks: pd.DataFrame, song, color: str, base=None, max_width: int = 320, labels: bool = True) -> str:
+    """1曲分のレーダーチャートをSVGで作る。viewBox で縦横比を保ったまま枠の幅に合わせて縮むので、
+    サイドバーを開いて列が狭くなっても図がはみ出さない。base を渡すと選んだ曲の形を灰色の点線で重ねる。"""
+    # 小さい図は項目名を出さず（右の大きい図と同じ並び）、図形を大きく見せる
+    width, height = (300, 200) if labels else (200, 200)
+    cx, cy, radius = width / 2, height / 2, 62 if labels else 88
     angles = np.pi / 2 - 2 * np.pi * np.arange(len(RADAR)) / len(RADAR)
 
-    def shape(values, name):
-        return [{"x": v * np.cos(a), "y": v * np.sin(a), "k": k, "曲": name,
-                 "特徴": LABELS[RADAR[k % len(RADAR)]], "値": round(v, 2)}
-                for k, (v, a) in enumerate(zip([*values, values[0]], [*angles, angles[0]]))]
+    def point(value, angle):
+        return cx + value * radius * np.cos(angle), cy - value * radius * np.sin(angle)
 
-    grid = [{"x": r * np.cos(a), "y": r * np.sin(a), "r": r, "k": k}
-            for r in (0.5, 1.0) for k, a in enumerate([*angles, angles[0]])]
-    spokes = [{"x": v * np.cos(a), "y": v * np.sin(a), "s": i, "k": v} for i, a in enumerate(angles) for v in (0, 1)]
-    small = height < 250
-    # 左右の文字は外側へ寄せ、上下は中央ぞろえにして、小さい図でも文字が切れないようにする
-    labels = [{"x": 1.12 * np.cos(a), "y": 1.18 * np.sin(a), "label": LABELS[f],
-               "align": "center" if abs(np.cos(a)) < 0.2 else ("left" if np.cos(a) > 0 else "right")}
-              for f, a in zip(RADAR, angles)]
-    width = 1.85 if small else 1.7
-    axis = {"axis": None, "scale": {"domain": [-width, width], "nice": False}}
-    xy = {"x": {"field": "x", "type": "quantitative", **axis}, "y": {"field": "y", "type": "quantitative", **axis}}
-    layers = [
-        {"data": {"values": grid}, "mark": {"type": "line", "color": "#D9D9D9", "strokeWidth": 1},
-         "encoding": {**xy, "detail": {"field": "r"}, "order": {"field": "k"}}},
-        {"data": {"values": spokes}, "mark": {"type": "line", "color": "#E6E6E6", "strokeWidth": 1},
-         "encoding": {**xy, "detail": {"field": "s"}, "order": {"field": "k"}}},
-        *[{"data": {"values": [l for l in labels if l["align"] == align]},
-           "mark": {"type": "text", "fontSize": 9 if small else 13, "color": "#555", "align": align, "baseline": "middle"},
-           "encoding": {**xy, "text": {"field": "label"}}} for align in ("center", "left", "right")],
-    ]
-    tooltip = [{"field": "曲"}, {"field": "特徴"}, {"field": "値", "title": "値（0〜1）"}]
+    def polygon(values):
+        return " ".join(f"{x:.1f},{y:.1f}" for x, y in (point(v, a) for v, a in zip(values, angles)))
+
+    parts = [f'<polygon points="{polygon([r] * len(RADAR))}" fill="none" stroke="#D9D9D9" stroke-width="1"/>'
+             for r in (0.5, 1.0)]
+    parts += [f'<line x1="{cx}" y1="{cy}" x2="{x:.1f}" y2="{y:.1f}" stroke="#E6E6E6" stroke-width="1"/>'
+              for x, y in (point(1.0, a) for a in angles)]
+    for feature, angle in zip(RADAR, angles if labels else []):
+        x, y = point(1.16, angle)
+        c = np.cos(angle)
+        anchor = "middle" if abs(c) < 0.2 else ("start" if c > 0 else "end")
+        parts.append(f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{anchor}" dominant-baseline="middle" '
+                     f'font-size="14" fill="#555">{escape(LABELS[feature])}</text>')
     if base is not None:
-        layers.append({"data": {"values": shape(radar_values(tracks, base), "選んだ曲")},
-                       "mark": {"type": "line", "color": "#9A9A9A", "strokeDash": [3, 3], "strokeWidth": 1.5},
-                       "encoding": {**xy, "order": {"field": "k"}, "tooltip": tooltip}})
-    layers.append({"data": {"values": shape(radar_values(tracks, song), str(song["track_name"]))},
-                   "mark": {"type": "line", "color": color, "strokeWidth": 2.5, "point": {"filled": True, "size": 30, "color": color}},
-                   "encoding": {**xy, "order": {"field": "k"}, "tooltip": tooltip}})
-    return {"height": height, "width": height, "padding": {"top": 4, "bottom": 4, "left": 4, "right": 4}, "layer": layers}
+        parts.append(f'<polygon points="{polygon(radar_values(tracks, base))}" fill="none" stroke="#9A9A9A" '
+                     f'stroke-width="1.5" stroke-dasharray="4 3"/>')
+    values = radar_values(tracks, song)
+    parts.append(f'<polygon points="{polygon(values)}" fill="{color}" fill-opacity="0.12" stroke="{color}" stroke-width="2.5"/>')
+    for feature, value, angle in zip(RADAR, values, angles):
+        x, y = point(value, angle)
+        parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="{color}">'
+                     f'<title>{escape(LABELS[feature])}：{value:.2f}</title></circle>')
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+           f'font-family="sans-serif">{"".join(parts)}</svg>')
+    # 画像として埋め込む（st.html はSVGを取り除くため）。幅100%で縦横比を保ったまま縮む
+    data = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return (f'<img src="data:image/svg+xml;base64,{data}" alt="レーダーチャート" '
+            f'style="width:100%;max-width:{max_width}px;height:auto;display:block;margin:0 auto">')
 
 
 def popularity_text(value) -> str:
@@ -117,9 +120,9 @@ def render_compare(catalog: Catalog):
     left, right = st.columns([3, 2], gap="medium")
     with left, st.container(border=True):
         genres = sorted(catalog.genre_rows.track_genre.unique())
-        picker, _ = st.columns([2, 3])
+        picker, _ = st.columns([3, 2])
         genre = picker.selectbox("ジャンル", [ALL_GENRES, *genres], key="_compare_genre", label_visibility="collapsed",
-                                 format_func=lambda g: "すべてのジャンル" if g == ALL_GENRES else g)
+                                 format_func=lambda g: "すべてのジャンル" if g == ALL_GENRES else genre_label(g))
         similar = find_similar_in(catalog, song["track_id"], None if genre == ALL_GENRES else genre)
         if similar.empty:
             st.info("このジャンルには比べられる曲がありません。別のジャンルを選んでください。")
@@ -127,22 +130,23 @@ def render_compare(catalog: Catalog):
             for column, (_, row) in zip(st.columns(SHOW), similar.iterrows()):
                 with column, st.container(border=True):
                     song_header(row)
-                    st.vega_lite_chart(radar_chart(tracks, row, SIMILAR_COLOR, 128, base=song), width="content")
+                    st.html(radar_svg(tracks, row, SIMILAR_COLOR, base=song, max_width=160, labels=False))
                     big_number("人気度", popularity_text(row.popularity), SIMILAR_COLOR, "2rem",
                                f"類似度 {row.similarity:.2f}")
             average = similar.popularity.mean()
             gap = "" if pd.isna(average) or pd.isna(song.get("popularity")) else (
                 f"選んだ曲より {abs(song['popularity'] - average):.0f} {'低い' if average < song['popularity'] else '高い'}"
                 if round(abs(song["popularity"] - average)) else "選んだ曲とほぼ同じ")
-            where = "すべてのジャンル" if genre == ALL_GENRES else genre
-            big_number(f"似ている{len(similar)}曲の平均人気度（{where}）",
+            where = "すべてのジャンル" if genre == ALL_GENRES else genre_label(genre)
+            big_number(f"似ている{len(similar)}曲の平均人気度：{where}",
                        "—" if pd.isna(average) else f"{average:.0f}", SIMILAR_COLOR, "4rem", gap)
-            st.caption("灰色の点線は選んだ曲の形です。形が重なるほど音が似ています。")
+            st.caption("小さい図の項目の並びは右の図と同じです（上：テンポ、右：力強さ、下：明るさ、左：ノリの良さ）。"
+                       "灰色の点線は選んだ曲の形で、重なるほど音が似ています。")
 
     with right, st.container(border=True):
         st.markdown("##### あなたが選んだ曲")
         song_header(song)
-        st.vega_lite_chart(radar_chart(tracks, song, SONG_COLOR, 300), width="content")
+        st.html(radar_svg(tracks, song, SONG_COLOR))
         big_number("人気度", popularity_text(song.get("popularity")), SONG_COLOR, "4rem")
 
     if not similar.empty and tracks.popularity.notna().sum() >= 3:
