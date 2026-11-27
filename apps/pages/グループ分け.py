@@ -4,13 +4,22 @@ import plotly.express as px
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from music_app.data import catalog_for_page
-from music_app.selection import selected_track
+from music_app.selection import clear_selection, selected_track
 
 st.set_page_config(
     page_title="グループ分け - 楽曲ムード分析",
     page_icon="🎵",
     layout="wide"
 )
+
+
+def clear_group_selection():
+    clear_selection()
+    st.session_state["_group_filter_source_track_id"] = None
+    st.session_state["_group_seed_keyword"] = ""
+    st.session_state["_group_keyword"] = ""
+    st.session_state["_group_mood_filter"] = "すべて表示"
+
 
 # ---------------------------------------------------------
 # 1. 共通関数でデータ取得 ＋ KMeans法による3グループ自動分類
@@ -70,21 +79,42 @@ with st.container(border=True):
         "🌙 バラード・チル系（静か・落ち着き）",
         "🔥 ロック・エナジー系（激しい・スピード感）"
     ]
+    keyword_key = "_group_keyword"
+    seed_keyword_key = "_group_seed_keyword"
     mood_filter_key = "_group_mood_filter"
-    selected_track_id = selected_song["track_id"] if selected_song is not None else None
-    if st.session_state.get("_group_mood_source_track_id") != selected_track_id:
-        st.session_state["_group_mood_source_track_id"] = selected_track_id
+    source_track_key = "_group_filter_source_track_id"
+    selected_track_id = str(selected_song["track_id"]) if selected_song is not None else None
+    if source_track_key not in st.session_state or st.session_state[source_track_key] != selected_track_id:
+        seed_keyword = (
+            f"{selected_song['track_name']} / {selected_song['artists']}"
+            if selected_song is not None else ""
+        )
+        st.session_state[source_track_key] = selected_track_id
+        st.session_state[seed_keyword_key] = seed_keyword
+        st.session_state[keyword_key] = seed_keyword
         st.session_state[mood_filter_key] = (
             selected_song["ムード（グループ）"] if selected_song is not None else mood_options[0]
         )
-    elif st.session_state.get(mood_filter_key) not in mood_options:
-        st.session_state[mood_filter_key] = mood_options[0]
+    else:
+        st.session_state.setdefault(keyword_key, "")
+        st.session_state.setdefault(seed_keyword_key, "")
+        if st.session_state.get(mood_filter_key) not in mood_options:
+            st.session_state[mood_filter_key] = mood_options[0]
 
     with col1:
         keyword = st.text_input(
             "キーワード検索（曲名・アーティスト名）",
-            placeholder="例: Lemon / Kenshi Yonezu"
+            placeholder="例: Lemon / Kenshi Yonezu",
+            key=keyword_key
         )
+        exact_selected_track = (
+            selected_track_id is not None
+            and keyword == st.session_state[seed_keyword_key]
+        )
+        if exact_selected_track:
+            st.caption("選択曲のIDで厳密に絞り込み中です。キーワードを編集すると通常検索になります。")
+        elif selected_song is not None:
+            st.caption("選択曲を変更すると、キーワードとムードの初期値が更新されます。")
 
     with col2:
         selected_mood = st.selectbox(
@@ -107,16 +137,27 @@ with st.container(border=True):
             value=(min_bpm, max_bpm)
         )
 
+    if selected_song is not None:
+        st.button(
+            "選択曲をクリア",
+            key="_group_clear_selected_song",
+            help="共有している選択曲を解除し、キーワードとムードを初期状態に戻します。",
+            on_click=clear_group_selection,
+        )
+
 # ---------------------------------------------------------
 # 4. 絞り込み処理（フィルタリング）
 # ---------------------------------------------------------
 filtered_df = df.copy()
 
 if keyword:
-    filtered_df = filtered_df[
-        filtered_df[TRACK_COL].astype(str).str.contains(keyword, case=False, na=False) |
-        filtered_df[ARTIST_COL].astype(str).str.contains(keyword, case=False, na=False)
-    ]
+    if exact_selected_track:
+        filtered_df = filtered_df[filtered_df["track_id"].astype(str).eq(selected_track_id)]
+    else:
+        filtered_df = filtered_df[
+            filtered_df[TRACK_COL].astype(str).str.contains(keyword, case=False, na=False, regex=False) |
+            filtered_df[ARTIST_COL].astype(str).str.contains(keyword, case=False, na=False, regex=False)
+        ]
 
 if selected_mood != "すべて表示":
     filtered_df = filtered_df[filtered_df["ムード（グループ）"] == selected_mood]
