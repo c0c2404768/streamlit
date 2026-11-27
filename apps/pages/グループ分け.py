@@ -4,6 +4,7 @@ import plotly.express as px
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from music_app.data import catalog_for_page
+from music_app.similar import find_similar, standardized_matrix
 from music_app.selection import clear_selection, selected_track
 
 st.set_page_config(
@@ -57,6 +58,18 @@ def get_clustered_catalog(tracks: pd.DataFrame):
     }
     df["ムード（グループ）"] = df["cluster"].map(label_map)
     return df, track_col, artist_col
+
+
+@st.cache_data(show_spinner="近い楽曲を検索しています…")
+def get_similar_tracks(tracks: pd.DataFrame, track_id: str) -> pd.DataFrame:
+    return find_similar(
+        tracks,
+        standardized_matrix(tracks),
+        track_id,
+        top_n=len(tracks),
+        method="euc",
+    )
+
 
 df, TRACK_COL, ARTIST_COL = get_clustered_catalog(catalog_for_page().tracks)
 selected_song = selected_track(df)
@@ -148,12 +161,11 @@ with st.container(border=True):
 # ---------------------------------------------------------
 # 4. 絞り込み処理（フィルタリング）
 # ---------------------------------------------------------
-filtered_df = df.copy()
-
-if keyword:
-    if exact_selected_track:
-        filtered_df = filtered_df[filtered_df["track_id"].astype(str).eq(selected_track_id)]
-    else:
+if exact_selected_track:
+    filtered_df = get_similar_tracks(df, selected_track_id)
+else:
+    filtered_df = df.copy()
+    if keyword:
         filtered_df = filtered_df[
             filtered_df[TRACK_COL].astype(str).str.contains(keyword, case=False, na=False, regex=False) |
             filtered_df[ARTIST_COL].astype(str).str.contains(keyword, case=False, na=False, regex=False)
@@ -184,7 +196,10 @@ with col_chart:
         "🔥 ロック・エナジー系（激しい・スピード感）": "#EF476F",
     }
     MAP_LIMIT = 5000  # 点が多すぎると表示が重くなるため、地図に出す曲数の上限
-    map_df = filtered_df.sample(n=MAP_LIMIT, random_state=0) if len(filtered_df) > MAP_LIMIT else filtered_df
+    if exact_selected_track:
+        map_df = search_results
+    else:
+        map_df = filtered_df.sample(n=MAP_LIMIT, random_state=0) if len(filtered_df) > MAP_LIMIT else filtered_df
     fig = px.scatter(
         map_df,
         x="valence",
@@ -210,13 +225,16 @@ with col_chart:
             hovertemplate="%{text}<br>Valence=%{x}<br>Energy=%{y}<extra></extra>",
         )
     st.plotly_chart(fig, width="stretch")
-    if len(filtered_df) > MAP_LIMIT:
+    if exact_selected_track:
+        st.caption("選択曲との4つの音響特徴量を標準化し、距離が近い上位100曲をマップにも表示しています。基準曲と同じ曲名・アーティストの曲は除外しています。")
+    elif len(filtered_df) > MAP_LIMIT:
         st.caption(f"該当する{len(filtered_df):,}曲のうち、{MAP_LIMIT:,}曲をランダムに選んで表示しています。")
     if selected_song is not None:
         st.caption("★は「曲の検索・選択」で選んだ曲です。")
 
 with col_list:
-    st.subheader(f"🎶 検索結果（該当: {len(filtered_df):,}曲）")
+    result_title = "選択曲に値が近い楽曲" if exact_selected_track else "検索結果"
+    st.subheader(f"🎶 {result_title}（該当: {len(filtered_df):,}曲）")
     if selected_song is not None:
         st.text(f"選択中の曲: {selected_song['track_name']} / {selected_song['artists']}")
         st.caption(f"ムード: {selected_song['ムード（グループ）']}")
@@ -227,8 +245,12 @@ with col_list:
         ARTIST_COL: "アーティスト",
         "tempo": "BPM"
     })
+    if exact_selected_track:
+        display_df["特徴距離"] = search_results["distance"].round(3).to_numpy()
     st.dataframe(display_df, width="stretch", hide_index=True)
-    if len(filtered_df) > SEARCH_RESULT_LIMIT:
+    if exact_selected_track and len(filtered_df) > SEARCH_RESULT_LIMIT:
+        st.caption(f"値が近い順に上位{SEARCH_RESULT_LIMIT}曲を表示しています。")
+    elif len(filtered_df) > SEARCH_RESULT_LIMIT:
         st.caption(f"検索結果一覧は先頭{SEARCH_RESULT_LIMIT}曲まで表示しています。条件を追加すると絞り込めます。")
 
 st.divider()
