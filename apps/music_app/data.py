@@ -25,6 +25,8 @@ UNITS = {feature: "0〜1" for feature in FEATURES}
 UNITS.update(tempo="BPM", duration_min="分")
 META = ("track_id", "track_name", "artists")
 TUNEBAT_CSV = Path(__file__).with_name("assets") / "tunebat_tracks.csv"
+# 追加曲のアーティストごとのジャンル（Wikidata のジャンルを114ジャンルに対応させたもの、見つからない場合はアーティスト単位で判断したもの）
+TUNEBAT_GENRES_CSV = Path(__file__).with_name("assets") / "tunebat_artist_genres.csv"
 ARTIST_ALIASES = {"gen hoshino": ("星野源", "ほしのげん"), "mariya takeuchi": ("竹内まりや", "たけうちまりや")}
 
 
@@ -112,7 +114,33 @@ def prepare_catalog(raw: pd.DataFrame, source_label="CSV") -> Catalog:
     return Catalog(genre_rows, tracks, available, report)
 
 
-def add_tunebat_tracks(catalog: Catalog, additional: pd.DataFrame) -> Catalog:
+FILLED_FROM_ARTIST = "アーティストから補完"
+ADDED_GENRE_SOURCES = (FILLED_FROM_ARTIST, "Wikidataから付与", "アーティストの調査から付与")
+
+
+def main_artist(artists) -> str:
+    """複数アーティスト（「;」区切り）のうち、先頭の名前をそろえた形で返す。"""
+    return normalize_text(str(artists).split(";")[0])
+
+
+def artist_genres(genre_rows: pd.DataFrame) -> dict[str, str]:
+    """元データで、アーティストごとに曲数が最も多いジャンル（同数ならジャンル名順で先のもの）。"""
+    rows = genre_rows.assign(_main=genre_rows.artists.map(main_artist))
+    counts = rows.groupby(["_main", "track_genre"]).size().reset_index(name="count")
+    best = counts.sort_values(["_main", "count", "track_genre"], ascending=[True, False, True]).drop_duplicates("_main")
+    return dict(zip(best._main, best.track_genre))
+
+
+def load_artist_genre_table(path=None) -> pd.DataFrame | None:
+    path = TUNEBAT_GENRES_CSV if path is None else Path(path)
+    if not path.is_file():
+        return None
+    table = pd.read_csv(path, encoding="utf-8-sig")
+    table["_main"] = table.artist.map(main_artist)
+    return table.drop_duplicates("_main")
+
+
+def add_tunebat_tracks(catalog: Catalog, additional: pd.DataFrame, artist_table: pd.DataFrame | None = None) -> Catalog:
     """同じSpotify IDは統合。既存曲の音響値と既知ジャンルは変更しない。"""
     extra = prepare_catalog(additional, source_label="Tunebat").tracks
     tracks = catalog.tracks.set_index("track_id", drop=False).copy()
@@ -130,11 +158,30 @@ def add_tunebat_tracks(catalog: Catalog, additional: pd.DataFrame) -> Catalog:
     new_tracks = extra.loc[~extra.track_id.isin(overlap)]
     tracks = pd.concat([tracks.reset_index(drop=True), new_tracks], ignore_index=True)
     tracks = index_tracks(tracks, catalog.genre_rows)
+    # ジャンルが無い追加曲は、元データに同じアーティストの曲があれば、そのアーティストに多いジャンルで補う。
+    # 音の特徴からの推測はしない。genre_rows（ジャンル比較の集計）には加えない。
+    tracks["genre_source"] = np.where(tracks.genres.eq("未登録"), "未登録", "データセット")
+    lookup = artist_genres(catalog.genre_rows)
+    main = tracks.artists.map(main_artist)
+    fill = tracks.genres.eq("未登録") & main.isin(lookup)
+    tracks.loc[fill, "genres"] = main[fill].map(lookup)
+    tracks.loc[fill, "genre_source"] = FILLED_FROM_ARTIST
+    # それでも未登録の曲は、アーティストごとのジャンル表（出どころ付き）で付ける
+    table = load_artist_genre_table() if artist_table is None else artist_table
+    looked_up = pd.Series(False, index=tracks.index)
+    if table is not None and len(table):
+        genre_of = dict(zip(table._main, table.genre))
+        source_of = dict(zip(table._main, table.genre_source))
+        looked_up = tracks.genres.eq("未登録") & main.isin(genre_of)
+        tracks.loc[looked_up, "genres"] = main[looked_up].map(genre_of)
+        tracks.loc[looked_up, "genre_source"] = main[looked_up].map(source_of)
     report = dict(catalog.report)
     report.update({
         "元データの楽曲数": len(catalog.tracks), "追加ファイルの曲数": len(extra),
         "既存の楽曲IDと一致": len(overlap), "新規追加曲数": len(new_tracks),
-        "楽曲数": len(tracks), "ジャンル未登録の曲数": int(tracks.genres.eq("未登録").sum()),
+        "楽曲数": len(tracks), "アーティストからジャンルを補完した曲数": int(fill.sum()),
+        "ジャンル表で付けた曲数": int(looked_up.sum()),
+        "ジャンル未登録の曲数": int(tracks.genres.eq("未登録").sum()),
     })
     return Catalog(catalog.genre_rows, tracks, catalog.features, report)
 
