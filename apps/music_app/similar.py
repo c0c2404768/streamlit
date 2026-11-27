@@ -188,18 +188,14 @@ def render_similar(catalog: Catalog):
     st.subheader("似ている曲のランキング")
     st.caption(describe_filters(cond))
     score = "distance" if euclid else "similarity"
-    table = result[["rank", "track_name", "artists", "genres", "popularity", score, "reason", "url"]]
+    table = result[["rank", "track_name", "artists", "genres", "popularity", score, "reason"]]
     st.dataframe(table, hide_index=True, width="stretch", column_config={
         "rank": "順位", "track_name": "曲名", "artists": "アーティスト", "genres": "ジャンル",
         "popularity": "人気度",
         "similarity": st.column_config.NumberColumn("類似度", format="%.3f"),
         "distance": st.column_config.NumberColumn("距離", format="%.3f"),
-        "reason": "似ている理由", "url": st.column_config.LinkColumn("Spotify", display_text="開く"),
+        "reason": "似ている理由",
     })
-    if euclid:
-        st.caption("距離は0以上で、0に近いほど似ています。4つの特徴を標準化し、値そのものの近さで比べています。")
-    else:
-        st.caption("類似度は−1〜1で、1に近いほど似ています。4つの特徴を標準化し、ベクトルの向き（特徴のバランス）で比べています。")
 
     left, right = st.columns([3, 2])
     with left:
@@ -220,10 +216,8 @@ def render_similar(catalog: Catalog):
             st.vega_lite_chart(spec=radar_spec(radar_points(tracks, base, top3, chosen), names, chosen),
                                width="stretch")
         missing = [LABELS[f] for f in RADAR_FEATURES if f not in usable]
-        note = "テンポは最大値、曲の長さは上位1%の長さで割って0〜1にそろえています。点にカーソルを合わせると元の値も確認できます。"
         if missing:
-            note += f"（{'・'.join(missing)}は値がない曲があるため外しています）"
-        st.caption(note)
+            st.caption(f"{'・'.join(missing)}は値がない曲があるため外しています。")
     with right:
         st.subheader("試聴")
         pick = st.selectbox("試聴する曲", result.track_id.tolist(), key="_similar_listen",
@@ -232,4 +226,3 @@ def render_similar(catalog: Catalog):
         components.iframe(spotify_embed_url(pick), height=152)
         st.caption("選んだ曲")
         components.iframe(spotify_embed_url(base.track_id), height=152)
-        st.caption("Spotifyの埋め込みプレーヤーです。表示にはインターネット接続が必要です。")
