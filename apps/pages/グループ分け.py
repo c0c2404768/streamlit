@@ -64,6 +64,21 @@ st.write("楽曲の音響特徴量をもとに自動分類された3つのグル
 with st.container(border=True):
     st.subheader("🔍 楽曲検索・絞り込み")
     col1, col2, col3 = st.columns(3)
+    mood_options = [
+        "すべて表示",
+        "☀️ ポップ・ハッピー系（明るい・気分が上がる）",
+        "🌙 バラード・チル系（静か・落ち着き）",
+        "🔥 ロック・エナジー系（激しい・スピード感）"
+    ]
+    mood_filter_key = "_group_mood_filter"
+    selected_track_id = selected_song["track_id"] if selected_song is not None else None
+    if st.session_state.get("_group_mood_source_track_id") != selected_track_id:
+        st.session_state["_group_mood_source_track_id"] = selected_track_id
+        st.session_state[mood_filter_key] = (
+            selected_song["ムード（グループ）"] if selected_song is not None else mood_options[0]
+        )
+    elif st.session_state.get(mood_filter_key) not in mood_options:
+        st.session_state[mood_filter_key] = mood_options[0]
 
     with col1:
         keyword = st.text_input(
@@ -72,13 +87,15 @@ with st.container(border=True):
         )
 
     with col2:
-        mood_options = [
-            "すべて表示",
-            "☀️ ポップ・ハッピー系（明るい・気分が上がる）",
-            "🌙 バラード・チル系（静か・落ち着き）",
-            "🔥 ロック・エナジー系（激しい・スピード感）"
-        ]
-        selected_mood = st.selectbox("ムード（グループ）を選択", mood_options)
+        selected_mood = st.selectbox(
+            "ムード（グループ）を選択",
+            mood_options,
+            key=mood_filter_key
+        )
+        if selected_song is not None:
+            st.caption("選択曲のムードを初期値に設定しました。必要に応じて変更できます。")
+        else:
+            st.caption("曲を選ぶと、その曲のムードが初期選択されます。")
 
     with col3:
         min_bpm = int(df["tempo"].min())
