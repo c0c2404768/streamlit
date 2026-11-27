@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from music_app.data import Catalog, LABELS, UNITS
+from music_app.data import ADDED_GENRE_SOURCES, Catalog, LABELS, UNITS
 from music_app.selection import selected_track
 
 DEFAULT_GENRES = ("j-pop", "rock", "jazz")
@@ -244,6 +244,12 @@ def render_genre_comparison(catalog: Catalog):
         own_genres = catalog.genre_rows.loc[
             catalog.genre_rows.track_id.eq(song["track_id"]), "track_genre"
         ].unique().tolist()
+        filled = not own_genres and song.get("genre_source") in ADDED_GENRE_SOURCES and song.get("genres") in genres
+        if filled:  # 追加曲で、アーティスト単位でジャンルを付けた曲
+            own_genres = [song["genres"]]
+            how = {"アーティストから補完": "元データの同じアーティストの曲から補ったもの",
+                   "Wikidataから付与": "Wikidata のアーティスト情報から付けたもの"}.get(song["genre_source"], "アーティスト単位で判断して付けたもの")
+            st.caption(f"この曲のジャンル「{song['genres']}」は、{how}です（ジャンル比較の集計には含めていません）。")
         if own_genres:
             if st.button("この曲が入っているジャンルを比べる", key="_genre_use_selected"):
                 st.session_state["genre_choices"] = own_genres[:12]
